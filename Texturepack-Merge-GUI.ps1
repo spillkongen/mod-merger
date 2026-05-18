@@ -22,7 +22,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18x'
+$script:GuiBuildTag = '2026-05-18y'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -571,10 +571,12 @@ function Get-AppendEntriesForSourceRoot {
     $contentRoot = Resolve-ModContentRoot -ExtractedFolder $Root
     $styles = @(Get-ModStyleChoices -RootFolder $contentRoot)
     if ($styles.Count -ge 2) {
-        if (-not $SelectedStyleFolders -or $SelectedStyleFolders.Count -eq 0) {
-            return @()
+        $stylePaths = @($SelectedStyleFolders | Where-Object { $_ })
+        if ($stylePaths.Count -eq 0) {
+            $stylePaths = @($styles | ForEach-Object { $_.FolderPath })
+            Write-Log ("Multiple style folders found — using all $($stylePaths.Count) for merge scan.") $ColorFgDim
         }
-        return @(Get-ModAppendFileEntries -ModRoot $contentRoot -LimitToStyleFolders $SelectedStyleFolders)
+        return @(Get-ModAppendFileEntries -ModRoot $contentRoot -LimitToStyleFolders $stylePaths)
     }
     return @(Get-ModAppendFileEntries -ModRoot $contentRoot -LimitToStyleFolders @($contentRoot))
 }
@@ -2734,7 +2736,7 @@ $rbReplace.Location = New-Object System.Drawing.Point(20, 34)
 $rbReplace.Size = New-Object System.Drawing.Size(820, 26)
 $rbReplace.ForeColor = $ColorFg
 $rbReplace.Font = $FontBold
-$rbReplace.Checked = $true
+$rbReplace.Checked = $false
 $modeCard.Controls.Add($rbReplace)
 Set-ThemedChildSurface $rbReplace
 
@@ -2744,6 +2746,7 @@ $rbAppend.Location = New-Object System.Drawing.Point(20, 66)
 $rbAppend.Size = New-Object System.Drawing.Size(820, 26)
 $rbAppend.ForeColor = $ColorFg
 $rbAppend.Font = $FontBold
+$rbAppend.Checked = $true
 $modeCard.Controls.Add($rbAppend)
 Set-ThemedChildSurface $rbAppend
 
@@ -2887,7 +2890,7 @@ $folderCard.Controls.Add($outHint)
 Set-ThemedChildSurface $outHint
 
 # ---------- Merge actions (Step 3) — directly under folder picker so buttons stay visible ----------
-$script:ActionsCardHeight = 96
+$script:ActionsCardHeight = 118
 $actionsCardY = $contentTop + 122 + 228 + 12
 $actionsCard = New-ThemedPanel -Title 'Step 3  -  Run merge (download, convert, add to pack)'
 $actionsCard.Location = New-Object System.Drawing.Point(20, $actionsCardY)
@@ -2896,16 +2899,34 @@ $actionsCard.Anchor = 'Top,Left,Right'
 $mainPanel.Controls.Add($actionsCard)
 
 $dryRunBox = New-Object System.Windows.Forms.CheckBox
-$dryRunBox.Text = 'Dry run  -  preview only, do not copy any files'
+$dryRunBox.Text = 'Dry run only  -  preview in log, NO files copied (leave OFF to merge for real)'
 $dryRunBox.Location = New-Object System.Drawing.Point(12, 24)
-$dryRunBox.Size = New-Object System.Drawing.Size(400, 22)
-$dryRunBox.ForeColor = $ColorFg
-$dryRunBox.Font = $FontBold
-$dryRunBox.Checked = $true
+$dryRunBox.Size = New-Object System.Drawing.Size(520, 22)
+$dryRunBox.ForeColor = $ColorFgDim
+$dryRunBox.Font = $FontHint
+$dryRunBox.Checked = $false
 $dryRunBox.UseVisualStyleBackColor = $false
 $dryRunBox.BackColor = [System.Drawing.Color]::Transparent
 $actionsCard.Controls.Add($dryRunBox)
 Set-ThemedChildSurface $dryRunBox
+$dryRunBox.Add_CheckedChanged({
+    if ($dryRunBox.Checked) {
+        $dryRunBox.ForeColor = $ColorWarn
+        $dryRunBox.Font = $FontBold
+    } else {
+        $dryRunBox.ForeColor = $ColorFgDim
+        $dryRunBox.Font = $FontHint
+    }
+})
+
+$runFeedbackLbl = New-Object System.Windows.Forms.Label
+$runFeedbackLbl.Text = 'Ready — fill folders above, then Run Full Merge.'
+$runFeedbackLbl.Location = New-Object System.Drawing.Point(12, 70)
+$runFeedbackLbl.Size = New-Object System.Drawing.Size(540, 20)
+$runFeedbackLbl.ForeColor = $ColorFgDim
+$runFeedbackLbl.Font = $FontHint
+$actionsCard.Controls.Add($runFeedbackLbl)
+Set-ThemedChildSurface $runFeedbackLbl
 
 $skipConfirmBox = New-Object System.Windows.Forms.CheckBox
 $skipConfirmBox.Text = 'Skip confirm popups  -  just run (uncheck to confirm each step)'
@@ -3826,8 +3847,8 @@ function Get-MergePlan {
     Write-Log "Total source files: $($filtered.Count)" $ColorFg
 
     if ($filtered.Count -eq 0) {
-        Write-Log 'No source files found - nothing to do.' $ColorWarn
-        return $null
+        Write-Log 'No .dds files found in source yet. Run PNG conversion first, or check folder paths.' $ColorWarn
+        return @()
     }
 
     Write-Log "Scanning destination: $TargetFolder" $ColorFgDim
@@ -4148,6 +4169,12 @@ function Invoke-FullMergePipeline {
 
     $gbDownloads = @()
 
+    if ($DryRun) {
+        Write-Log '*** DRY RUN ON — nothing will be written to disk. Uncheck "Dry run only" to merge for real. ***' $ColorWarn
+    } else {
+        Write-Log 'Live merge — files will be downloaded, converted, and copied.' $ColorOk
+    }
+
     if ($linksPath) {
         Write-Log '=== Step 1/5: Download GameBanana mods (links file) ===' $ColorAccent
         Set-Status 'Downloading GameBanana mods...' $ColorAccent2
@@ -4177,7 +4204,11 @@ function Invoke-FullMergePipeline {
     Set-Status 'Building merge plan...' $ColorFg
     $plan = Get-MergePlan -SourceFolder $SourceFolder -SourceFolder2 '' -TargetFolder $TargetFolder -Mode $Mode `
         -Source1StyleFolders $src1StyleFolders -Source2StyleFolders @()
-    if ($null -eq $plan) { return }
+    if ($null -eq $plan) {
+        Write-Log 'Folder merge cancelled (duplicate file choice or scan error).' $ColorWarn
+        Set-Status 'Merge cancelled.' $ColorWarn
+        return
+    }
     Show-Plan -Plan @($plan) -Mode $Mode
     if (@($plan).Count -eq 0) {
         Write-Log 'Folder merge: nothing to copy from sources.' $ColorWarn
@@ -4228,8 +4259,13 @@ function Invoke-FullMergePipeline {
     }
 
     Write-Log ''
-    Write-Log 'Full pipeline finished.' $ColorOk
-    Set-Status 'Pipeline finished - see log.' $ColorOk
+    if ($DryRun) {
+        Write-Log '*** DRY RUN FINISHED — no files were changed. Uncheck Dry run and click Run again to apply. ***' $ColorWarn
+        Set-Status 'Dry run done — no files changed.' $ColorWarn
+    } else {
+        Write-Log 'Full pipeline finished — files were written.' $ColorOk
+        Set-Status 'Merge finished — see log.' $ColorOk
+    }
     if (-not $DryRun) {
         if (Open-FolderInExplorer -Path $TargetFolder -DelayMs 400) {
             $label = if ([string]::Equals($TargetFolder, $BasePack, [System.StringComparison]::OrdinalIgnoreCase)) { 'base pack' } else { 'output folder' }
@@ -4289,14 +4325,19 @@ $scanBtn.Add_Click((Wrap-SafeUiEvent {
 }))
 
 $runBtn.Add_Click((Wrap-SafeUiEvent {
-    Write-Log '=== Run Full Merge clicked ===' $ColorAccent
+    $runFeedbackLbl.Text = 'Run clicked — checking folders...'
+    $runFeedbackLbl.ForeColor = $ColorAccent2
+    [System.Windows.Forms.Application]::DoEvents()
     Set-Status 'Validating inputs...' $ColorFg
     if (-not (Test-Inputs)) {
+        $runFeedbackLbl.Text = 'Stopped — fix the folder paths (see popup or log).'
+        $runFeedbackLbl.ForeColor = $ColorWarn
         Set-Status 'Stopped — fix the input shown in the popup.' $ColorWarn
         return
     }
     if ($script:glassLog) { $script:glassLog.ClearLines() }
     Write-Log '=== Run Full Merge ===' $ColorAccent
+    Write-Log ("Build $($script:GuiBuildTag)") $ColorFgDim
     Reset-GlowProgress -Bar $progress -Max 100
     $scanBtn.Enabled = $false; $runBtn.Enabled = $false; $testBarBtn.Enabled = $false; $isoInstallBtn.Enabled = $false; $aboutBtn.Enabled = $false
     $gbDownloadBtn.Enabled = $false
@@ -4304,10 +4345,15 @@ $runBtn.Add_Click((Wrap-SafeUiEvent {
     try {
         $mode = Get-SelectedMode
         Write-Log ("Mode: $mode") $ColorAccent
-        Write-Log 'Run Merge runs the full pipeline: download -> PNG to DDS -> merge folders -> unzip mods -> append.' $ColorFgDim
+        if ($dryRunBox.Checked) {
+            Write-Log 'WARNING: Dry run is ON — you will NOT see any files change on disk!' $ColorWarn
+        }
+        Write-Log 'Pipeline: download -> PNG to DDS -> merge folders -> unzip mods -> append.' $ColorFgDim
 
         $src = (Resolve-Path -LiteralPath $srcBox.Text).Path
         $base = (Resolve-Path -LiteralPath $dstBox.Text).Path
+        Write-Log ("Base pack:   $base") $ColorFg
+        Write-Log ("Add from:    $src") $ColorFg
         $out = ''
         if (-not [string]::IsNullOrWhiteSpace($outBox.Text)) {
             $outRaw = $outBox.Text.Trim()
@@ -4328,13 +4374,28 @@ $runBtn.Add_Click((Wrap-SafeUiEvent {
 
         $skipConfirms = $false
         try { $skipConfirms = [bool]$skipConfirmBox.Checked } catch {}
+        $runFeedbackLbl.Text = if ($dryRunBox.Checked) { 'Running dry run (preview only)...' } else { 'Merging — watch the log below...' }
+        $runFeedbackLbl.ForeColor = $ColorAccent
         Invoke-FullMergePipeline -Mode $mode -SourceFolder $src -BasePack $base -OutputFolder $out `
             -DryRun $dryRunBox.Checked -IncludeGameBanana $true -SkipConfirm $skipConfirms
+        if ($dryRunBox.Checked) {
+            $runFeedbackLbl.Text = 'Dry run done — no files changed. Uncheck Dry run to merge for real.'
+            $runFeedbackLbl.ForeColor = $ColorWarn
+        } else {
+            $runFeedbackLbl.Text = 'Merge finished — check log and your base/output folder.'
+            $runFeedbackLbl.ForeColor = $ColorOk
+        }
     }
     catch {
         Write-Log ("ERROR: $($_.Exception.Message)") $ColorErr
         if ($_.ScriptStackTrace) { Write-Log $_.ScriptStackTrace $ColorFgDim }
+        $runFeedbackLbl.Text = "Error: $($_.Exception.Message)"
+        $runFeedbackLbl.ForeColor = $ColorErr
         Set-Status 'Error - see log.' $ColorErr
+        try {
+            [System.Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Run Full Merge failed',
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        } catch { }
     }
     finally {
         $gbDownloadBtn.Enabled = $true
