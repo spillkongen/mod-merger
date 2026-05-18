@@ -22,7 +22,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18t'
+$script:GuiBuildTag = '2026-05-18u'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -2847,44 +2847,44 @@ $folderCard.Controls.Add($srcHint)
 Set-ThemedChildSurface $srcHint
 
 # 3. Optional second source
-$srcLabel2 = New-Object System.Windows.Forms.Label
-$srcLabel2.Text = '3. Optional'
-$srcLabel2.Location = New-Object System.Drawing.Point(20, 174)
-$srcLabel2.Size = New-Object System.Drawing.Size(118, 22)
-$srcLabel2.ForeColor = $ColorFg
-$srcLabel2.Font = $FontBold
-$folderCard.Controls.Add($srcLabel2)
-Set-ThemedChildSurface $srcLabel2
+$outLabel = New-Object System.Windows.Forms.Label
+$outLabel.Text = '3. Output folder'
+$outLabel.Location = New-Object System.Drawing.Point(20, 174)
+$outLabel.Size = New-Object System.Drawing.Size(118, 22)
+$outLabel.ForeColor = $ColorAccent
+$outLabel.Font = $FontBold
+$folderCard.Controls.Add($outLabel)
+Set-ThemedChildSurface $outLabel
 
-$srcBox2 = New-Object System.Windows.Forms.TextBox
-$srcBox2.Location = New-Object System.Drawing.Point($script:FolderFieldX, 172)
-$srcBox2.Size = New-Object System.Drawing.Size(587, 24)
-$srcBox2.Anchor = 'Top,Left,Right'
-$srcBox2.BackColor = $ColorBgInput
-$srcBox2.ForeColor = $ColorFg
-$srcBox2.BorderStyle = 'FixedSingle'
-$folderCard.Controls.Add($srcBox2)
+$outBox = New-Object System.Windows.Forms.TextBox
+$outBox.Location = New-Object System.Drawing.Point($script:FolderFieldX, 172)
+$outBox.Size = New-Object System.Drawing.Size(587, 24)
+$outBox.Anchor = 'Top,Left,Right'
+$outBox.BackColor = $ColorBgInput
+$outBox.ForeColor = $ColorFg
+$outBox.BorderStyle = 'FixedSingle'
+$folderCard.Controls.Add($outBox)
 
-$srcBtn2 = New-Object System.Windows.Forms.Button
-$srcBtn2.Text = 'Browse...'
-$srcBtn2.Location = New-Object System.Drawing.Point(735, 169)
-$srcBtn2.Size = New-Object System.Drawing.Size(110, 28)
-$srcBtn2.Anchor = 'Top,Right'
-$srcBtn2.FlatStyle = 'Flat'
-$srcBtn2.BackColor = $ColorBgAlt
-$srcBtn2.ForeColor = $ColorFg
-$srcBtn2.FlatAppearance.BorderColor = $ColorBorderGlow
-$srcBtn2.FlatAppearance.MouseOverBackColor = $ColorBorder
-$folderCard.Controls.Add($srcBtn2)
+$outBtn = New-Object System.Windows.Forms.Button
+$outBtn.Text = 'Browse...'
+$outBtn.Location = New-Object System.Drawing.Point(735, 169)
+$outBtn.Size = New-Object System.Drawing.Size(110, 28)
+$outBtn.Anchor = 'Top,Right'
+$outBtn.FlatStyle = 'Flat'
+$outBtn.BackColor = $ColorBgAlt
+$outBtn.ForeColor = $ColorFg
+$outBtn.FlatAppearance.BorderColor = $ColorBorderGlow
+$outBtn.FlatAppearance.MouseOverBackColor = $ColorBorder
+$folderCard.Controls.Add($outBtn)
 
-$srcHint2 = New-Object System.Windows.Forms.Label
-$srcHint2.Text = 'Leave empty unless you have a third pack. Same rules: pick the GZ2 folder inside the pack.'
-$srcHint2.Location = New-Object System.Drawing.Point(20, 198)
-$srcHint2.Size = New-Object System.Drawing.Size(820, 18)
-$srcHint2.ForeColor = $ColorFgDim
-$srcHint2.Font = $FontHint
-$folderCard.Controls.Add($srcHint2)
-Set-ThemedChildSurface $srcHint2
+$outHint = New-Object System.Windows.Forms.Label
+$outHint.Text = 'Leave empty to merge IN PLACE into the base pack. Or pick a folder to save the merged result there (base pack stays untouched — folder is created if missing).'
+$outHint.Location = New-Object System.Drawing.Point(20, 198)
+$outHint.Size = New-Object System.Drawing.Size(820, 18)
+$outHint.ForeColor = $ColorFgDim
+$outHint.Font = $FontHint
+$folderCard.Controls.Add($outHint)
+Set-ThemedChildSurface $outHint
 
 # ---------- Merge actions (Step 3) — directly under folder picker so buttons stay visible ----------
 $script:ActionsCardHeight = 78
@@ -3471,9 +3471,9 @@ $srcBtn.Add_Click({
     if ($p) { $srcBox.Text = $p }
 })
 
-$srcBtn2.Add_Click({
-    $p = Select-FolderInteractive -Description '3. OPTIONAL - Third pack GZ2 folder (leave empty if you only use two packs)' -InitialPath $srcBox2.Text
-    if ($p) { $srcBox2.Text = $p }
+$outBtn.Add_Click({
+    $p = Select-FolderInteractive -Description '3. OUTPUT FOLDER - Where the merged pack is saved (leave empty to merge in place into the base pack)' -InitialPath $outBox.Text
+    if ($p) { $outBox.Text = $p }
 })
 
 $pngBrowseBtn.Add_Click({
@@ -3969,20 +3969,28 @@ function Test-Inputs {
         [System.Windows.Forms.MessageBox]::Show('Source and destination folders must be different.', 'Same folder', 'OK', 'Warning') | Out-Null
         return $false
     }
-    # Source 2 is optional; if provided it must exist and not collide with the others
-    if (-not [string]::IsNullOrWhiteSpace($srcBox2.Text)) {
-        if (-not (Test-Path -LiteralPath $srcBox2.Text -PathType Container)) {
-            [System.Windows.Forms.MessageBox]::Show("Source 2 folder not found:`n$($srcBox2.Text)", 'Source 2 not found', 'OK', 'Error') | Out-Null
-            return $false
+    # Output folder is optional. If set it cannot equal "Add from" (source).
+    # If output equals base, that is treated as in-place merge.
+    if (-not [string]::IsNullOrWhiteSpace($outBox.Text)) {
+        $outRaw = $outBox.Text.Trim()
+        if (Test-Path -LiteralPath $outRaw -PathType Container) {
+            $outResolved = (Resolve-Path -LiteralPath $outRaw).Path
+            if ([string]::Equals($outResolved, $srcResolved, [System.StringComparison]::OrdinalIgnoreCase)) {
+                [System.Windows.Forms.MessageBox]::Show('Output folder must be different from the "Add from" source.', 'Same folder', 'OK', 'Warning') | Out-Null
+                return $false
+            }
         }
-        $src2Resolved = (Resolve-Path -LiteralPath $srcBox2.Text).Path
-        if ([string]::Equals($src2Resolved, $srcResolved, [System.StringComparison]::OrdinalIgnoreCase)) {
-            [System.Windows.Forms.MessageBox]::Show('Source 2 must be different from Source 1.', 'Same folder', 'OK', 'Warning') | Out-Null
-            return $false
-        }
-        if ([string]::Equals($src2Resolved, $dstResolved, [System.StringComparison]::OrdinalIgnoreCase)) {
-            [System.Windows.Forms.MessageBox]::Show('Source 2 must be different from the destination folder.', 'Same folder', 'OK', 'Warning') | Out-Null
-            return $false
+        else {
+            try {
+                $parent = Split-Path -Path $outRaw -Parent
+                if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
+                    [System.Windows.Forms.MessageBox]::Show("Output folder parent does not exist:`n$parent", 'Output folder', 'OK', 'Error') | Out-Null
+                    return $false
+                }
+            } catch {
+                [System.Windows.Forms.MessageBox]::Show("Output folder path is not valid:`n$outRaw", 'Output folder', 'OK', 'Error') | Out-Null
+                return $false
+            }
         }
     }
     return $true
@@ -4000,16 +4008,19 @@ function Get-SelectedMode {
 function Confirm-AppendMergeDirection {
     param(
         [string]$SourceFolder,
-        [string]$SourceFolder2,
+        [string]$BasePack,
         [string]$TargetFolder
     )
     $msg = 'Append missing files - confirm folders (Step 2):' + [Environment]::NewLine + [Environment]::NewLine
-    $msg += '  1. BASE pack (your main pack - keeps files, receives new ones):' + [Environment]::NewLine + '    ' + $TargetFolder + [Environment]::NewLine + [Environment]::NewLine
-    $msg += '  2. ADD FROM (other pack - missing files copied from here):' + [Environment]::NewLine + '    ' + $SourceFolder + [Environment]::NewLine
-    if (-not [string]::IsNullOrWhiteSpace($SourceFolder2)) {
-        $msg += [Environment]::NewLine + '  3. OPTIONAL (third pack):' + [Environment]::NewLine + '    ' + $SourceFolder2 + [Environment]::NewLine
+    $msg += '  1. BASE pack (kept as-is, used as the starting point):' + [Environment]::NewLine + '    ' + $BasePack + [Environment]::NewLine + [Environment]::NewLine
+    $msg += '  2. ADD FROM (missing files copied from here):' + [Environment]::NewLine + '    ' + $SourceFolder + [Environment]::NewLine
+    $msg += [Environment]::NewLine + '  3. OUTPUT (final merged pack is saved here):' + [Environment]::NewLine + '    ' + $TargetFolder + [Environment]::NewLine
+    if ([string]::Equals($BasePack, $TargetFolder, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $msg += '    (same as base pack — merging IN PLACE)' + [Environment]::NewLine
+    } else {
+        $msg += '    (separate folder — base pack is NOT modified)' + [Environment]::NewLine
     }
-    $msg += [Environment]::NewLine + 'Only adds files that are not already in your base pack. New folders get an -Imported suffix. PNG/DDS match by file name.' + [Environment]::NewLine + [Environment]::NewLine + 'Continue?'
+    $msg += [Environment]::NewLine + 'Only .dds textures are copied. New folders get an -Imported suffix.' + [Environment]::NewLine + [Environment]::NewLine + 'Continue?'
     $r = [System.Windows.Forms.MessageBox]::Show(
         $msg, 'Append missing files - confirm folders',
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
@@ -4026,12 +4037,52 @@ function Test-GameBananaLinksReady {
     return (Test-Path -LiteralPath $gbLinksBox.Text -PathType Leaf)
 }
 
+function Initialize-OutputFromBase {
+    param(
+        [string]$BasePack,
+        [string]$OutputFolder,
+        [bool]$DryRun,
+        [scriptblock]$LogFn
+    )
+    if ([string]::IsNullOrWhiteSpace($OutputFolder)) { return $BasePack }
+    if ([string]::Equals($OutputFolder, $BasePack, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $BasePack
+    }
+    if (-not (Test-Path -LiteralPath $OutputFolder -PathType Container)) {
+        if ($DryRun) {
+            if ($LogFn) { & $LogFn "Dry run: would create output folder: $OutputFolder" 'warn' }
+        } else {
+            New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null
+            if ($LogFn) { & $LogFn "Created output folder: $OutputFolder" 'ok' }
+        }
+    }
+    if ($DryRun) {
+        if ($LogFn) { & $LogFn "Dry run: would copy base pack -> output folder ($BasePack -> $OutputFolder)" 'warn' }
+        return $OutputFolder
+    }
+    if ($LogFn) { & $LogFn "Seeding output folder from base pack (this may take a moment)..." 'accent' }
+    try {
+        $rcArgs = @($BasePack, $OutputFolder, '/E', '/COPY:DAT', '/R:1', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS', '/nc', '/ns', '/np')
+        $null = & robocopy @rcArgs 2>&1
+        if ($LASTEXITCODE -lt 8) {
+            if ($LogFn) { & $LogFn "Output folder seeded from base pack." 'ok' }
+        } else {
+            if ($LogFn) { & $LogFn "robocopy returned code $LASTEXITCODE — falling back to Copy-Item." 'warn' }
+            Copy-Item -LiteralPath (Join-Path $BasePack '*') -Destination $OutputFolder -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        if ($LogFn) { & $LogFn "robocopy unavailable — using Copy-Item: $($_.Exception.Message)" 'warn' }
+        Copy-Item -LiteralPath (Join-Path $BasePack '*') -Destination $OutputFolder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return $OutputFolder
+}
+
 function Invoke-FullMergePipeline {
     param(
         [ValidateSet('Replace', 'AppendMissing')][string]$Mode,
         [string]$SourceFolder,
-        [string]$SourceFolder2,
-        [string]$TargetFolder,
+        [string]$BasePack,
+        [string]$OutputFolder,
         [bool]$DryRun,
         [bool]$IncludeGameBanana
     )
@@ -4041,8 +4092,18 @@ function Invoke-FullMergePipeline {
         $linksPath = (Resolve-Path -LiteralPath $gbLinksBox.Text).Path
     }
 
+    # Decide TargetFolder: if Output is set and different from Base, seed it from base then write there.
+    $TargetFolder = $BasePack
+    if (-not [string]::IsNullOrWhiteSpace($OutputFolder)) {
+        $TargetFolder = Initialize-OutputFromBase -BasePack $BasePack -OutputFolder $OutputFolder -DryRun $DryRun -LogFn ({
+            param($m, $k)
+            $color = switch ($k) { 'err' { $ColorErr } 'warn' { $ColorWarn } 'ok' { $ColorOk } 'accent' { $ColorAccent } default { $ColorFg } }
+            Write-Log $m $color
+        })
+    }
+
     if ($Mode -eq 'AppendMissing') {
-        if (-not (Confirm-AppendMergeDirection -SourceFolder $SourceFolder -SourceFolder2 $SourceFolder2 -TargetFolder $TargetFolder)) {
+        if (-not (Confirm-AppendMergeDirection -SourceFolder $SourceFolder -BasePack $BasePack -TargetFolder $TargetFolder)) {
             Write-Log 'Cancelled - append folder direction not confirmed.' $ColorWarn
             Set-Status 'Cancelled.' $ColorWarn
             return
@@ -4079,25 +4140,20 @@ function Invoke-FullMergePipeline {
     }
 
     $src1StyleFolders = @()
-    $src2StyleFolders = @()
 
-    Write-Log '=== Step 2/5: Convert PNG -> DDS in source folder(s) ===' $ColorAccent
-    Set-Status 'Converting PNG in sources...' $ColorFg
+    Write-Log '=== Step 2/5: Convert PNG -> DDS in "Add from" source ===' $ColorAccent
+    Set-Status 'Converting PNG in source...' $ColorFg
     if ($DryRun) {
-        Write-Log 'Dry run: would convert PNGs in source folder(s) with texconv.' $ColorWarn
+        Write-Log 'Dry run: would convert PNGs in source folder with texconv.' $ColorWarn
     } else {
         $r1 = Invoke-PngToDdsForFolder -Folder $SourceFolder -LogFn $logFn -ProgressBar $progress -PromptForStyle $true
         $src1StyleFolders = @($r1.SelectedStyleFolders)
-        if (-not [string]::IsNullOrWhiteSpace($SourceFolder2)) {
-            $r2 = Invoke-PngToDdsForFolder -Folder $SourceFolder2 -LogFn $logFn -ProgressBar $progress -PromptForStyle $true
-            $src2StyleFolders = @($r2.SelectedStyleFolders)
-        }
     }
 
-    Write-Log '=== Step 3/5: Merge source folder(s) into destination ===' $ColorAccent
+    Write-Log '=== Step 3/5: Merge "Add from" into target ===' $ColorAccent
     Set-Status 'Building merge plan...' $ColorFg
-    $plan = Get-MergePlan -SourceFolder $SourceFolder -SourceFolder2 $SourceFolder2 -TargetFolder $TargetFolder -Mode $Mode `
-        -Source1StyleFolders $src1StyleFolders -Source2StyleFolders $src2StyleFolders
+    $plan = Get-MergePlan -SourceFolder $SourceFolder -SourceFolder2 '' -TargetFolder $TargetFolder -Mode $Mode `
+        -Source1StyleFolders $src1StyleFolders -Source2StyleFolders @()
     if ($null -eq $plan) { return }
     Show-Plan -Plan @($plan) -Mode $Mode
     if (@($plan).Count -eq 0) {
@@ -4148,7 +4204,8 @@ function Invoke-FullMergePipeline {
     Set-Status 'Pipeline finished - see log.' $ColorOk
     if (-not $DryRun) {
         if (Open-FolderInExplorer -Path $TargetFolder -DelayMs 400) {
-            Write-Log "Opened base pack in File Explorer: $TargetFolder" $ColorFgDim
+            $label = if ([string]::Equals($TargetFolder, $BasePack, [System.StringComparison]::OrdinalIgnoreCase)) { 'base pack' } else { 'output folder' }
+            Write-Log "Opened $label in File Explorer: $TargetFolder" $ColorFgDim
         }
     }
 }
@@ -4163,13 +4220,21 @@ $scanBtn.Add_Click((Wrap-SafeUiEvent {
     try {
         $mode = Get-SelectedMode
         Write-Log ("Mode: $mode") $ColorAccent
-        $src2Path = ''
-        if (-not [string]::IsNullOrWhiteSpace($srcBox2.Text)) {
-            $src2Path = (Resolve-Path -LiteralPath $srcBox2.Text).Path
+        $basePack = (Resolve-Path -LiteralPath $dstBox.Text).Path
+        $addFrom = (Resolve-Path -LiteralPath $srcBox.Text).Path
+        $target = $basePack
+        if (-not [string]::IsNullOrWhiteSpace($outBox.Text)) {
+            $outRaw = $outBox.Text.Trim()
+            if (Test-Path -LiteralPath $outRaw -PathType Container) {
+                $target = (Resolve-Path -LiteralPath $outRaw).Path
+            } else {
+                $target = $outRaw
+            }
+            Write-Log ("Output folder: $target (preview — would seed from base pack: $basePack)") $ColorFgDim
         }
-        $plan = Get-MergePlan -SourceFolder (Resolve-Path -LiteralPath $srcBox.Text).Path `
-                              -SourceFolder2 $src2Path `
-                              -TargetFolder (Resolve-Path -LiteralPath $dstBox.Text).Path `
+        $plan = Get-MergePlan -SourceFolder $addFrom `
+                              -SourceFolder2 '' `
+                              -TargetFolder $target `
                               -Mode $mode
         if ($null -eq $plan) {
             Set-Status 'Scan cancelled or empty.' $ColorWarn
@@ -4205,13 +4270,18 @@ $runBtn.Add_Click((Wrap-SafeUiEvent {
         Write-Log 'Run Merge runs the full pipeline: download -> PNG to DDS -> merge folders -> unzip mods -> append.' $ColorFgDim
 
         $src = (Resolve-Path -LiteralPath $srcBox.Text).Path
-        $dst = (Resolve-Path -LiteralPath $dstBox.Text).Path
-        $src2 = ''
-        if (-not [string]::IsNullOrWhiteSpace($srcBox2.Text)) {
-            $src2 = (Resolve-Path -LiteralPath $srcBox2.Text).Path
+        $base = (Resolve-Path -LiteralPath $dstBox.Text).Path
+        $out = ''
+        if (-not [string]::IsNullOrWhiteSpace($outBox.Text)) {
+            $outRaw = $outBox.Text.Trim()
+            if (Test-Path -LiteralPath $outRaw -PathType Container) {
+                $out = (Resolve-Path -LiteralPath $outRaw).Path
+            } else {
+                $out = $outRaw
+            }
         }
 
-        Invoke-FullMergePipeline -Mode $mode -SourceFolder $src -SourceFolder2 $src2 -TargetFolder $dst `
+        Invoke-FullMergePipeline -Mode $mode -SourceFolder $src -BasePack $base -OutputFolder $out `
             -DryRun $dryRunBox.Checked -IncludeGameBanana $true
     }
     catch {
@@ -4229,7 +4299,7 @@ $runBtn.Add_Click((Wrap-SafeUiEvent {
 
 Write-Log 'Twilight Texture Pack Merger ready.' $ColorAccent
 Write-Log ("App folder (links .txt + mod downloads): $(Get-ModMergerAppFolder)") $ColorFgDim
-Write-Log 'Append mode: Source (and optional Source 2) add missing files INTO Destination (you confirm folders on Run).' $ColorFg
+Write-Log 'Append mode: "Add from" supplies missing files. Set "Output folder" to save the merged pack separately, or leave it empty to merge in place into the base pack.' $ColorFg
 Write-Log 'Run Full Merge: GameBanana download -> PNG to DDS -> merge folders -> unzip mods -> append to finished mod.' $ColorFg
 Write-Log 'Scan/Preview: plan only. PNG to DDS row: convert any folder manually with texconv.' $ColorFg
 Write-Log 'GameBanana button: download+merge mods alone (no folder merge).' $ColorFg
