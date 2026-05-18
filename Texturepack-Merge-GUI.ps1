@@ -21,7 +21,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18ze'
+$script:GuiBuildTag = '2026-05-18zf'
 $script:SuppressLogFileWrite = $false
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
@@ -464,13 +464,65 @@ function Test-IsPathUnderFolder {
     return $FilePath.StartsWith($folder, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Test-IsGz2TexturePackRoot {
+    param([string]$Folder)
+    if (-not (Test-Path -LiteralPath $Folder -PathType Container)) { return $false }
+    $root = (Resolve-Path -LiteralPath $Folder).Path
+    if ((Split-Path -Path $root -Leaf) -eq 'GZ2') { return $true }
+    $ddsCount = @(Get-ChildItem -LiteralPath $root -Filter '*.dds' -File -Recurse -ErrorAction SilentlyContinue).Count
+    if ($ddsCount -lt 20) { return $false }
+    $topDirs = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name.ToUpperInvariant() })
+    $gz2Markers = @('CREATURE', 'MENU', 'MAP', 'NPC', 'OBJECT', 'ROOM', 'ST', 'RVL', 'WARP')
+    $hits = @($gz2Markers | Where-Object { $topDirs -contains $_ }).Count
+    return ($hits -ge 2)
+}
+
+function Find-Gz2PackFolder {
+    param([string]$StartFolder)
+    if ([string]::IsNullOrWhiteSpace($StartFolder) -or -not (Test-Path -LiteralPath $StartFolder -PathType Container)) {
+        return $StartFolder
+    }
+    $start = (Resolve-Path -LiteralPath $StartFolder).Path
+    if ((Split-Path -Path $start -Leaf) -eq 'GZ2') { return $start }
+    $direct = Join-Path $start 'GZ2'
+    if (Test-Path -LiteralPath $direct -PathType Container) {
+        return (Resolve-Path -LiteralPath $direct).Path
+    }
+    $queue = [System.Collections.Queue]::new()
+    [void]$queue.Enqueue($start)
+    $seen = @{}
+    $maxDepth = 4
+    while ($queue.Count -gt 0) {
+        $dir = [string]$queue.Dequeue()
+        if ($seen.ContainsKey($dir)) { continue }
+        $seen[$dir] = $true
+        if ((Split-Path -Path $dir -Leaf) -eq 'GZ2') { return $dir }
+        $depth = ($dir.Substring($start.Length).Trim('\') -split '\\').Count
+        if ($depth -ge $maxDepth) { continue }
+        foreach ($child in @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue)) {
+            if ($child.Name -eq 'GZ2') { return $child.FullName }
+            [void]$queue.Enqueue($child.FullName)
+        }
+    }
+    return $start
+}
+
+function Resolve-UserPackFolder {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return $Path }
+    return Find-Gz2PackFolder -StartFolder $Path
+}
+
 function Resolve-ModContentRoot {
     param([string]$ExtractedFolder)
-    $root = (Resolve-Path -LiteralPath $ExtractedFolder).Path
+    $root = Find-Gz2PackFolder -StartFolder $ExtractedFolder
+    if (Test-IsGz2TexturePackRoot -Folder $root) { return $root }
     if (@(Get-ModStyleChoices -RootFolder $root).Count -gt 0) { return $root }
     $childDirs = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)
     if ($childDirs.Count -eq 1) {
         $inner = $childDirs[0].FullName
+        $inner = Find-Gz2PackFolder -StartFolder $inner
         if (@(Get-ModStyleChoices -RootFolder $inner).Count -gt 0) { return $inner }
     }
     return $root
@@ -573,6 +625,9 @@ function Get-AppendEntriesForSourceRoot {
         [string[]]$SelectedStyleFolders
     )
     $contentRoot = Resolve-ModContentRoot -ExtractedFolder $Root
+    if (Test-IsGz2TexturePackRoot -Folder $contentRoot) {
+        return @(Get-ModAppendFileEntries -ModRoot $contentRoot -LimitToStyleFolders @($contentRoot))
+    }
     $styles = @(Get-ModStyleChoices -RootFolder $contentRoot)
     if ($styles.Count -ge 2) {
         $stylePaths = @($SelectedStyleFolders | Where-Object { $_ })
@@ -595,6 +650,15 @@ function Invoke-PngToDdsForFolder {
         [bool]$EntireTree = $false
     )
     $contentRoot = Resolve-ModContentRoot -ExtractedFolder $Folder
+    if (Test-IsGz2TexturePackRoot -Folder $contentRoot) {
+        if ($LogFn) { & $LogFn 'GZ2 texture pack — converting tex*.png in all subfolders (CREATURE, MENU, etc.).' 'dim' }
+        $total = Convert-PngsInFolderToDds -Folder $contentRoot -LogFn $LogFn -ProgressBar $ProgressBar -IncludeAllPngs:$IncludeAllPngs
+        return [pscustomobject]@{
+            Count                = $total
+            SelectedStyleFolders = @($contentRoot)
+            ContentRoot          = $contentRoot
+        }
+    }
     $styles = @(Get-ModStyleChoices -RootFolder $contentRoot)
     $targetFolders = @()
 
@@ -912,10 +976,11 @@ function Add-ModFolderToDestinationGui {
     if ($LogFn) { & $LogFn ("=== Adding mod: $ModLabel ===") 'accent' }
 
     $contentRoot = Resolve-ModContentRoot -ExtractedFolder $ModFolder
-    $convert = Invoke-PngToDdsForFolder -Folder $ModFolder -LogFn $LogFn -ProgressBar $ProgressBar -PromptForStyle $true
+    if ($LogFn) { & $LogFn ("  Pack root: $contentRoot") 'dim' }
+    $convert = Invoke-PngToDdsForFolder -Folder $contentRoot -LogFn $LogFn -ProgressBar $ProgressBar -PromptForStyle $true
     $styleLimit = @($convert.SelectedStyleFolders)
 
-    if (@(Get-ModStyleChoices -RootFolder $contentRoot).Count -ge 2 -and $styleLimit.Count -eq 0) {
+    if (-not (Test-IsGz2TexturePackRoot -Folder $contentRoot) -and @(Get-ModStyleChoices -RootFolder $contentRoot).Count -ge 2 -and $styleLimit.Count -eq 0) {
         if ($LogFn) { & $LogFn 'No style chosen - mod not appended.' 'warn' }
         return
     }
@@ -2973,12 +3038,12 @@ $actionsCard.Controls.Add($skipConfirmBox)
 Set-ThemedChildSurface $skipConfirmBox
 
 $includeGbMergeBox = New-Object System.Windows.Forms.CheckBox
-$includeGbMergeBox.Text = 'Also download GameBanana mods (off = merge your two folders only)'
+$includeGbMergeBox.Text = 'Include GameBanana mods from gamebanana-mods.txt in Run Full Merge'
 $includeGbMergeBox.Location = New-Object System.Drawing.Point(12, 68)
 $includeGbMergeBox.Size = New-Object System.Drawing.Size(800, 22)
-$includeGbMergeBox.ForeColor = $ColorFgDim
+$includeGbMergeBox.ForeColor = $ColorAccent2
 $includeGbMergeBox.Font = $FontHint
-$includeGbMergeBox.Checked = $false
+$includeGbMergeBox.Checked = $true
 $actionsCard.Controls.Add($includeGbMergeBox)
 Set-ThemedChildSurface $includeGbMergeBox
 
@@ -3269,12 +3334,20 @@ $form.Add_Load({
         if ([string]::IsNullOrWhiteSpace($gbLinksBox.Text)) { $gbLinksBox.Text = $p }
     }
     if ($dstBox -and [string]::IsNullOrWhiteSpace($dstBox.Text)) {
-        $gz2 = Join-Path $app 'GZ2'
-        if (Test-Path -LiteralPath $gz2 -PathType Container) { $dstBox.Text = $gz2 }
+        foreach ($c in @((Join-Path $app 'GZ2'), (Join-Path $app 'henriko\GZ2'), $app)) {
+            if (Test-Path -LiteralPath $c -PathType Container) {
+                $dstBox.Text = Resolve-UserPackFolder -Path $c
+                break
+            }
+        }
     }
     if ($srcBox -and [string]::IsNullOrWhiteSpace($srcBox.Text)) {
-        $tphd = Join-Path $app 'tphd'
-        if (Test-Path -LiteralPath $tphd -PathType Container) { $srcBox.Text = $tphd }
+        foreach ($c in @((Join-Path $app 'tphd'), (Join-Path $app 'tphd\GZ2'))) {
+            if (Test-Path -LiteralPath $c -PathType Container) {
+                $srcBox.Text = Resolve-UserPackFolder -Path $c
+                break
+            }
+        }
     }
     Import-SessionLogFilesToView -Append -ReportMissing
     Write-Log '--- Live session ---' $ColorAccent
@@ -3710,16 +3783,17 @@ function Select-FolderInteractive {
 }
 
 $dstBtn.Add_Click({
-    $p = Select-FolderInteractive -Description '1. BASE PACK - Your main GZ2 folder (the pack you KEEP and build on). Example: Henriko\GZ2 or TPHD\GZ2' -InitialPath $dstBox.Text
+    $p = Select-FolderInteractive -Description '1. BASE PACK - Your main GZ2 folder (the pack you KEEP). Pick Henriko folder or Henriko\GZ2 — app finds GZ2 automatically.' -InitialPath $dstBox.Text
     if ($p) {
-        $dstBox.Text = $p
-        if ($pngFolderBox -and [string]::IsNullOrWhiteSpace($pngFolderBox.Text)) { $pngFolderBox.Text = $p }
+        $resolved = Resolve-UserPackFolder -Path $p
+        $dstBox.Text = $resolved
+        if ($pngFolderBox -and [string]::IsNullOrWhiteSpace($pngFolderBox.Text)) { $pngFolderBox.Text = $resolved }
     }
 })
 
 $srcBtn.Add_Click({
-    $p = Select-FolderInteractive -Description '2. ADD FROM - The OTHER pack GZ2 folder (missing files copy FROM here into your base pack). Example: the pack that is NOT your base' -InitialPath $srcBox.Text
-    if ($p) { $srcBox.Text = $p }
+    $p = Select-FolderInteractive -Description '2. ADD FROM - The OTHER pack (missing files copy FROM here). Pick TPHD folder or TPHD\GZ2 — app finds GZ2 automatically.' -InitialPath $srcBox.Text
+    if ($p) { $srcBox.Text = Resolve-UserPackFolder -Path $p }
 })
 
 $outBtn.Add_Click({
@@ -4239,8 +4313,14 @@ function Test-Inputs {
         Show-InputWarning -Msg "Base pack folder not found:`n$($dstBox.Text)" -Title 'Base pack not found' -Icon 'Error'
         return $false
     }
-    $srcResolved = (Resolve-Path -LiteralPath $srcBox.Text).Path
-    $dstResolved = (Resolve-Path -LiteralPath $dstBox.Text).Path
+    $srcResolved = Resolve-UserPackFolder -Path $srcBox.Text
+    $dstResolved = Resolve-UserPackFolder -Path $dstBox.Text
+    if ($srcResolved -ne $srcBox.Text.Trim()) {
+        Write-Log ("Using GZ2 subfolder for Add from: $srcResolved") $ColorFgDim
+    }
+    if ($dstResolved -ne $dstBox.Text.Trim()) {
+        Write-Log ("Using GZ2 subfolder for Base pack: $dstResolved") $ColorFgDim
+    }
     if ([string]::Equals($srcResolved, $dstResolved, [System.StringComparison]::OrdinalIgnoreCase)) {
         Show-InputWarning -Msg '"Base pack" and "Add from" must be different folders.' -Title 'Same folder'
         return $false
@@ -4314,6 +4394,11 @@ function Test-GameBananaLinksReady {
     return (Test-Path -LiteralPath $gbLinksBox.Text -PathType Leaf)
 }
 
+function Test-GameBananaHasDownloadLinks {
+    if (-not (Test-GameBananaLinksReady)) { return $false }
+    return (@(Get-GameBananaLinksFromFile -Path $gbLinksBox.Text).Count -gt 0)
+}
+
 function Initialize-OutputFromBase {
     param(
         [string]$BasePack,
@@ -4375,9 +4460,20 @@ function Invoke-FullMergePipeline {
         [bool]$SkipConfirm = $false
     )
 
+    $SourceFolder = Resolve-UserPackFolder -Path $SourceFolder
+    $BasePack = Resolve-UserPackFolder -Path $BasePack
+    Write-Log ("Resolved base pack (GZ2): $BasePack") $ColorFgDim
+    Write-Log ("Resolved add from (GZ2): $SourceFolder") $ColorFgDim
+
     $linksPath = $null
-    if ($IncludeGameBanana -and (Test-GameBananaLinksReady)) {
-        $linksPath = (Resolve-Path -LiteralPath $gbLinksBox.Text).Path
+    if ($IncludeGameBanana) {
+        if (Test-GameBananaHasDownloadLinks) {
+            $linksPath = (Resolve-Path -LiteralPath $gbLinksBox.Text).Path
+            $nLinks = @(Get-GameBananaLinksFromFile -Path $linksPath).Count
+            Write-Log ("GameBanana: $nLinks download link(s) from $linksPath") $ColorAccent
+        } else {
+            Write-Log 'GameBanana: links file has no URLs — skipping mod download.' $ColorWarn
+        }
     }
 
     # Decide TargetFolder: if Output is set and different from Base, seed it from base then write there.
@@ -4481,7 +4577,7 @@ function Invoke-FullMergePipeline {
     }
 
     if ($linksPath) {
-        Write-Log '=== Optional: GameBanana mods ===' $ColorAccent
+        Write-Log '=== Step 4/4: GameBanana mods (download, unzip, merge into pack) ===' $ColorAccent
         Set-Status 'Downloading GameBanana mods...' $ColorAccent2
         if ($DryRun) {
             $n = @(Get-GameBananaLinksFromFile -Path $linksPath).Count
@@ -4493,7 +4589,7 @@ function Invoke-FullMergePipeline {
             Invoke-GameBananaExtractAndMerge -TargetFolder $TargetFolder -DownloadFolder (Get-GameBananaDownloadFolder) -LogFn $logFn -ProgressBar $progress -DownloadedFiles $gbDownloads
         }
     } else {
-        Write-Log 'GameBanana: skipped (checkbox off or no links file).' $ColorFgDim
+        Write-Log 'GameBanana: skipped (turn on checkbox above or add URLs to gamebanana-mods.txt).' $ColorFgDim
     }
 
     Write-Log ''
@@ -4591,8 +4687,8 @@ $runBtn.Add_Click({
         }
         Write-Log 'Order: merge folders first, then optional GameBanana.' $ColorFgDim
 
-        $src = (Resolve-Path -LiteralPath $srcBox.Text).Path
-        $base = (Resolve-Path -LiteralPath $dstBox.Text).Path
+        $src = Resolve-UserPackFolder -Path $srcBox.Text
+        $base = Resolve-UserPackFolder -Path $dstBox.Text
         Write-Log ("Base pack:   $base") $ColorFg
         Write-Log ("Add from:    $src") $ColorFg
         Write-RunLogFile "Base=$base AddFrom=$src"
@@ -4613,8 +4709,13 @@ $runBtn.Add_Click({
 
         $skipConfirms = $false
         try { $skipConfirms = [bool]$skipConfirmBox.Checked } catch {}
-        $includeGb = $false
-        try { $includeGb = [bool]$includeGbMergeBox.Checked } catch {}
+        $includeGb = Test-GameBananaHasDownloadLinks
+        try { if ($includeGbMergeBox -and -not $includeGbMergeBox.Checked) { $includeGb = $false } } catch {}
+        if ($includeGb) {
+            Write-Log 'GameBanana merge: ON (from gamebanana-mods.txt)' $ColorAccent
+        } else {
+            Write-Log 'GameBanana merge: OFF (no links or checkbox unchecked)' $ColorWarn
+        }
         $runFeedbackLbl.Text = if ($dryRunBox.Checked) { 'Running dry run...' } else { 'Merging — see progress bar and log...' }
         $runFeedbackLbl.ForeColor = $ColorAccent
         Set-Status 'Merge running...' $ColorAccent2
