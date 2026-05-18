@@ -21,7 +21,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18zc'
+$script:GuiBuildTag = '2026-05-18zd'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -2550,9 +2550,9 @@ function Set-ThemedButton {
         [System.Drawing.Color]$Back,
         [System.Drawing.Color]$Border,
         [System.Drawing.Color]$Fore,
-        [System.Drawing.Color]$HoverBack = $null
+        [System.Drawing.Color]$HoverBack
     )
-    if (-not $HoverBack) {
+    if (-not $PSBoundParameters.ContainsKey('HoverBack')) {
         $HoverBack = [System.Drawing.Color]::FromArgb(
             [Math]::Min(255, $Back.R + 18),
             [Math]::Min(255, $Back.G + 14),
