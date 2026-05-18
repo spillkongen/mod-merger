@@ -22,7 +22,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18w'
+$script:GuiBuildTag = '2026-05-18x'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -2908,12 +2908,12 @@ $actionsCard.Controls.Add($dryRunBox)
 Set-ThemedChildSurface $dryRunBox
 
 $skipConfirmBox = New-Object System.Windows.Forms.CheckBox
-$skipConfirmBox.Text = 'Skip confirm dialogs  -  just run (no popups)'
+$skipConfirmBox.Text = 'Skip confirm popups  -  just run (uncheck to confirm each step)'
 $skipConfirmBox.Location = New-Object System.Drawing.Point(12, 48)
-$skipConfirmBox.Size = New-Object System.Drawing.Size(400, 22)
-$skipConfirmBox.ForeColor = $ColorFgDim
+$skipConfirmBox.Size = New-Object System.Drawing.Size(420, 22)
+$skipConfirmBox.ForeColor = $ColorAccent2
 $skipConfirmBox.Font = $FontHint
-$skipConfirmBox.Checked = $false
+$skipConfirmBox.Checked = $true
 $skipConfirmBox.UseVisualStyleBackColor = $false
 $skipConfirmBox.BackColor = [System.Drawing.Color]::Transparent
 $actionsCard.Controls.Add($skipConfirmBox)
