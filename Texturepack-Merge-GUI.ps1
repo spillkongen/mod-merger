@@ -22,7 +22,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18v'
+$script:GuiBuildTag = '2026-05-18w'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -2887,7 +2887,7 @@ $folderCard.Controls.Add($outHint)
 Set-ThemedChildSurface $outHint
 
 # ---------- Merge actions (Step 3) — directly under folder picker so buttons stay visible ----------
-$script:ActionsCardHeight = 78
+$script:ActionsCardHeight = 96
 $actionsCardY = $contentTop + 122 + 228 + 12
 $actionsCard = New-ThemedPanel -Title 'Step 3  -  Run merge (download, convert, add to pack)'
 $actionsCard.Location = New-Object System.Drawing.Point(20, $actionsCardY)
@@ -2897,8 +2897,8 @@ $mainPanel.Controls.Add($actionsCard)
 
 $dryRunBox = New-Object System.Windows.Forms.CheckBox
 $dryRunBox.Text = 'Dry run  -  preview only, do not copy any files'
-$dryRunBox.Location = New-Object System.Drawing.Point(12, 32)
-$dryRunBox.Size = New-Object System.Drawing.Size(400, 26)
+$dryRunBox.Location = New-Object System.Drawing.Point(12, 24)
+$dryRunBox.Size = New-Object System.Drawing.Size(400, 22)
 $dryRunBox.ForeColor = $ColorFg
 $dryRunBox.Font = $FontBold
 $dryRunBox.Checked = $true
@@ -2907,9 +2907,21 @@ $dryRunBox.BackColor = [System.Drawing.Color]::Transparent
 $actionsCard.Controls.Add($dryRunBox)
 Set-ThemedChildSurface $dryRunBox
 
+$skipConfirmBox = New-Object System.Windows.Forms.CheckBox
+$skipConfirmBox.Text = 'Skip confirm dialogs  -  just run (no popups)'
+$skipConfirmBox.Location = New-Object System.Drawing.Point(12, 48)
+$skipConfirmBox.Size = New-Object System.Drawing.Size(400, 22)
+$skipConfirmBox.ForeColor = $ColorFgDim
+$skipConfirmBox.Font = $FontHint
+$skipConfirmBox.Checked = $false
+$skipConfirmBox.UseVisualStyleBackColor = $false
+$skipConfirmBox.BackColor = [System.Drawing.Color]::Transparent
+$actionsCard.Controls.Add($skipConfirmBox)
+Set-ThemedChildSurface $skipConfirmBox
+
 $scanBtn = New-Object System.Windows.Forms.Button
 $scanBtn.Text = 'Scan / Preview'
-$scanBtn.Location = New-Object System.Drawing.Point(430, 28)
+$scanBtn.Location = New-Object System.Drawing.Point(430, 36)
 $scanBtn.Size = New-Object System.Drawing.Size(130, 36)
 $scanBtn.Anchor = 'Top,Right'
 $scanBtn.FlatStyle = 'Flat'
@@ -2922,7 +2934,7 @@ $actionsCard.Controls.Add($scanBtn)
 
 $runBtn = New-Object System.Windows.Forms.Button
 $runBtn.Text = 'Run Full Merge'
-$runBtn.Location = New-Object System.Drawing.Point(568, 28)
+$runBtn.Location = New-Object System.Drawing.Point(568, 36)
 $runBtn.Size = New-Object System.Drawing.Size(140, 36)
 $runBtn.Anchor = 'Top,Right'
 $runBtn.FlatStyle = 'Flat'
@@ -2935,7 +2947,7 @@ $actionsCard.Controls.Add($runBtn)
 
 $clearBtn = New-Object System.Windows.Forms.Button
 $clearBtn.Text = 'Clear Log'
-$clearBtn.Location = New-Object System.Drawing.Point(716, 28)
+$clearBtn.Location = New-Object System.Drawing.Point(716, 36)
 $clearBtn.Size = New-Object System.Drawing.Size(120, 36)
 $clearBtn.Anchor = 'Top,Right'
 $clearBtn.FlatStyle = 'Flat'
@@ -4030,8 +4042,9 @@ function Confirm-AppendMergeDirection {
         $msg += '    (separate folder — base pack is NOT modified)' + [Environment]::NewLine
     }
     $msg += [Environment]::NewLine + 'Only .dds textures are copied. New folders get an -Imported suffix.' + [Environment]::NewLine + [Environment]::NewLine + 'Continue?'
+    try { $form.Activate() } catch {}
     $r = [System.Windows.Forms.MessageBox]::Show(
-        $msg, 'Append missing files - confirm folders',
+        $form, $msg, 'Append missing files - confirm folders',
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question,
         [System.Windows.Forms.MessageBoxDefaultButton]::Button1)
@@ -4093,7 +4106,8 @@ function Invoke-FullMergePipeline {
         [string]$BasePack,
         [string]$OutputFolder,
         [bool]$DryRun,
-        [bool]$IncludeGameBanana
+        [bool]$IncludeGameBanana,
+        [bool]$SkipConfirm = $false
     )
 
     $linksPath = $null
@@ -4111,7 +4125,7 @@ function Invoke-FullMergePipeline {
         })
     }
 
-    if ($Mode -eq 'AppendMissing') {
+    if ($Mode -eq 'AppendMissing' -and -not $SkipConfirm) {
         if (-not (Confirm-AppendMergeDirection -SourceFolder $SourceFolder -BasePack $BasePack -TargetFolder $TargetFolder)) {
             Write-Log 'Cancelled - append folder direction not confirmed.' $ColorWarn
             Set-Status 'Cancelled.' $ColorWarn
@@ -4170,17 +4184,22 @@ function Invoke-FullMergePipeline {
     } elseif ($DryRun) {
         Write-Log ("Dry run: would merge $($plan.Count) file(s) from source(s) into destination.") $ColorWarn
     } else {
-        $warn = if ($Mode -eq 'Replace') {
-            "Overwrite $($plan.Count) file(s) in destination?`n$TargetFolder"
-        } else {
-            "Copy $($plan.Count) missing file(s) into destination?`n$TargetFolder"
+        $doCopy = $true
+        if (-not $SkipConfirm) {
+            $warn = if ($Mode -eq 'Replace') {
+                "Overwrite $($plan.Count) file(s) in destination?`n$TargetFolder"
+            } else {
+                "Copy $($plan.Count) missing file(s) into destination?`n$TargetFolder"
+            }
+            try { $form.Activate() } catch {}
+            $c = [System.Windows.Forms.MessageBox]::Show(
+                $form, $warn, 'Confirm folder merge',
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning,
+                [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+            $doCopy = ($c -eq [System.Windows.Forms.DialogResult]::Yes)
         }
-        $c = [System.Windows.Forms.MessageBox]::Show(
-            $warn, 'Confirm folder merge',
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning,
-            [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
-        if ($c -eq [System.Windows.Forms.DialogResult]::Yes) {
+        if ($doCopy) {
             Set-Status 'Merging folders...' $ColorFg
             Invoke-Plan -Plan @($plan)
         } else {
@@ -4307,8 +4326,10 @@ $runBtn.Add_Click((Wrap-SafeUiEvent {
             Write-Log 'Output:      (in place — base pack will be modified)' $ColorWarn
         }
 
+        $skipConfirms = $false
+        try { $skipConfirms = [bool]$skipConfirmBox.Checked } catch {}
         Invoke-FullMergePipeline -Mode $mode -SourceFolder $src -BasePack $base -OutputFolder $out `
-            -DryRun $dryRunBox.Checked -IncludeGameBanana $true
+            -DryRun $dryRunBox.Checked -IncludeGameBanana $true -SkipConfirm $skipConfirms
     }
     catch {
         Write-Log ("ERROR: $($_.Exception.Message)") $ColorErr
