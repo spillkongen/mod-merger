@@ -11,9 +11,8 @@ Two merge modes (both require two folders):
 
   Append missing files
     Copy every source file whose name does NOT exist anywhere in the
-    destination tree. Files are copied into the destination using their
-    relative path from the source, with "-Imported" appended to each
-    subfolder name (e.g. "ui\icons\foo.dds" -> "ui-Imported\icons-Imported\foo.dds").
+    destination tree. Files keep the same folder layout as the source pack
+    (e.g. tphd\CREATURE\tex1_foo.dds -> henriko\GZ2\CREATURE\tex1_foo.dds).
 
 A few specific filenames are excluded by default (loading-screen / boot-screen
 textures that should normally never be swapped).
@@ -22,7 +21,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18zb'
+$script:GuiBuildTag = '2026-05-18zc'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -919,7 +918,7 @@ function Add-ModFolderToDestinationGui {
 
     foreach ($sf in $styleLimit) {
         $leaf = Split-Path $sf -Leaf
-        $destPreview = Join-Path $TargetFolder (ConvertTo-ImportedRelativePath -RelativePath $leaf)
+        $destPreview = Join-Path $TargetFolder $leaf
         if ($LogFn) { & $LogFn ("  -> append into: $destPreview") 'dim' }
     }
 
@@ -937,7 +936,7 @@ function Add-ModFolderToDestinationGui {
         if ($LogFn) { & $LogFn ("Nothing new to add - all files already exist in destination.") 'warn' }
         return
     }
-    if ($LogFn) { & $LogFn ("Appending $($plan.Count) file(s) with -Imported folder names...") 'accent' }
+    if ($LogFn) { & $LogFn ("Appending $($plan.Count) file(s) into base pack folders...") 'accent' }
     Invoke-Plan -Plan @($plan)
     if ($OpenExplorer) {
         Open-ExplorerForAppendPlan -Plan @($plan) -TargetFolder $TargetFolder
@@ -999,7 +998,7 @@ function Invoke-GameBananaExtractAndMerge {
         if ($LogFn) { & $LogFn 'No downloaded archives in cache to extract.' 'warn' }
         return
     }
-    if ($LogFn) { & $LogFn ("Unzipping $($files.Count) archive(s), style picker, PNG to DDS, append missing (-Imported folders)...") 'accent' }
+    if ($LogFn) { & $LogFn ("Unzipping $($files.Count) archive(s), style picker, PNG to DDS, append missing into base pack...") 'accent' }
     if ($ProgressBar) { Reset-GlowProgress -Bar $ProgressBar -Max $files.Count }
     $knownZipExt = @('.zip', '.ziparchive', '.zipx', '.pk3', '.pk4')
     $archiveIdx = 0
@@ -1884,9 +1883,9 @@ function ConvertTo-ImportedRelativePath {
 
 function Get-ImportedDestinationPath {
     param([string]$SourceFolder, [string]$TargetFolder, [System.IO.FileInfo]$SourceFile)
+    # Merge into the base pack using the same subfolders as the source (no -Imported suffix).
     $rel = Get-RelativePathFromFolder -BaseFolder $SourceFolder -FullPath $SourceFile.FullName
-    $importedRel = ConvertTo-ImportedRelativePath -RelativePath $rel
-    return Join-Path -Path $TargetFolder -ChildPath $importedRel
+    return Join-Path -Path $TargetFolder -ChildPath $rel
 }
 
 function Get-ReplacementMatchKey {
@@ -3460,7 +3459,7 @@ WHAT "RUN FULL MERGE" DOES (IN ORDER)
   4. Converts PNG to DDS in the base pack.
   5. Unzips downloaded mods, converts PNG to DDS, appends into base pack.
 
-  New files go into -Imported subfolders.
+  New files go into the same subfolders as the source pack (e.g. CREATURE\, MENU\, etc.).
 
 
 OTHER BUTTONS
@@ -4126,7 +4125,7 @@ function Confirm-AppendMergeDirection {
     } else {
         $msg += '    (separate folder — base pack is NOT modified)' + [Environment]::NewLine
     }
-    $msg += [Environment]::NewLine + 'Only .dds textures are copied. New folders get an -Imported suffix.' + [Environment]::NewLine + [Environment]::NewLine + 'Continue?'
+    $msg += [Environment]::NewLine + 'Only .dds textures are copied. Missing files are added using the same folder names as the source pack.' + [Environment]::NewLine + [Environment]::NewLine + 'Continue?'
     try { $form.Activate() } catch {}
     $r = [System.Windows.Forms.MessageBox]::Show(
         $form, $msg, 'Append missing files - confirm folders',
