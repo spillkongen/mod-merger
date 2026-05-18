@@ -858,7 +858,7 @@ function Ensure-GameBananaLinksFile {
     $template = @'
 # GameBanana mods to download
 # ---------------------------------------------------------------
-# Keep this file in the SAME FOLDER as Start Mod Merger.vbs / the app.
+# Keep this file in the SAME FOLDER as launcher.bat / the app.
 # Downloaded mod .zip files are saved in that same folder (works on any PC/path).
 #
 # One DIRECT download URL per line (not the mod page link).
@@ -3094,7 +3094,7 @@ $gbCard.Anchor = 'Top,Left,Right'
 $mainPanel.Controls.Add($gbCard)
 
 $gbHint = New-Object System.Windows.Forms.Label
-$gbHint.Text = 'Put gamebanana-mods.txt next to Start Mod Merger.vbs — mod zips download to that same folder on any PC. One https://gamebanana.com/dl/... URL per line.'
+$gbHint.Text = 'Put gamebanana-mods.txt next to launcher.bat — mod zips download to that same folder on any PC. One https://gamebanana.com/dl/... URL per line.'
 $gbHint.Location = New-Object System.Drawing.Point(20, 30)
 $gbHint.Size = New-Object System.Drawing.Size(820, 36)
 $gbHint.ForeColor = $ColorFg
@@ -3632,7 +3632,7 @@ THE LINKS TXT FILE (gamebanana-mods.txt)  *** IMPORTANT ***
 
   WHERE IT LIVES
     Default name: gamebanana-mods.txt
-    Same folder as Start Mod Merger.vbs (portable — copy the whole folder anywhere).
+    Same folder as launcher.bat (portable — copy the whole folder anywhere).
     Full path on this PC:
       $gbTxtPath
     Downloaded mod .zip files are saved in that same folder.
@@ -3646,7 +3646,7 @@ THE LINKS TXT FILE (gamebanana-mods.txt)  *** IMPORTANT ***
     1. Open Notepad.
     2. Paste one direct download URL per line (see examples below).
     3. Save as gamebanana-mods.txt in the app folder (same place as
-       Launch.bat), OR save anywhere and use Browse... in the app.
+       launcher.bat), OR save anywhere and use Browse... in the app.
 
   WHAT TO PUT IN THE FILE (RULES)
     - ONE direct download URL per line.

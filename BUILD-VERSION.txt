@@ -1,0 +1,13 @@
+MOD MERGER — BUILD INFO
+Updated: 18.05.2026 23:15:00
+Build tag: 2026-05-18zf
+
+START THE APP WITH:
+  launcher.bat   (recommended — double-click this)
+
+Other launchers:
+  Launch.bat     (same as launcher.bat)
+  Start Mod Merger.vbs  (no console window)
+
+Main script: Texturepack-Merge-GUI.ps1
+Folder: C:\Users\marti\Desktop\Mod Merger
