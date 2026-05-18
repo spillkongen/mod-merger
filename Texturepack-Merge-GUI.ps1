@@ -22,7 +22,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18s'
+$script:GuiBuildTag = '2026-05-18t'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -226,21 +226,17 @@ $script:ExcludedFileNamesForMerge = @(
     'tex1_224x29_175aea04816c34a7_2.dds'
 )
 
-# Non-mod / source / editor files that should never be copied into a pack.
-# .pdn = Paint.NET source, .psd/.psb = Photoshop source, .xcf = GIMP source,
-# .kra = Krita, .ai = Illustrator, .clip = Clip Studio, .sai/.sai2 = SAI,
-# .bak/.tmp/.old/.orig = backups, .db = thumbnail caches, .lnk = shortcuts.
-$script:ExcludedExtensionsForMerge = @(
-    '.pdn', '.psd', '.psb', '.xcf', '.kra', '.ai', '.clip', '.sai', '.sai2',
-    '.bak', '.tmp', '.old', '.orig',
-    '.db', '.ini', '.lnk', '.url'
-)
+# Allowlist: ONLY final mod texture files are merged into a pack.
+# Everything else (.pdn / .psd / .bak / readme.txt / preview .png / .ini / etc.)
+# is silently dropped during the merge step. PNG to DDS conversion runs BEFORE
+# merge, so by the time we copy files, real textures already exist as .dds.
+$script:AllowedExtensionsForMerge = @('.dds')
 
-function Test-IsExcludedByExtension {
+function Test-IsAllowedForMerge {
     param([Parameter(Mandatory)][System.IO.FileInfo]$File)
     $ext = $File.Extension.ToLowerInvariant()
     if ([string]::IsNullOrEmpty($ext)) { return $false }
-    return ($script:ExcludedExtensionsForMerge -contains $ext)
+    return ($script:AllowedExtensionsForMerge -contains $ext)
 }
 
 function Find-Texconv {
@@ -485,7 +481,7 @@ function Get-ModAppendFileEntries {
     $allFiles = @(Get-ChildItem -LiteralPath $ModRoot -File -Recurse -ErrorAction SilentlyContinue)
     foreach ($f in $allFiles) {
         if ($f.Name -in $script:ExcludedFileNamesForMerge) { continue }
-        if (Test-IsExcludedByExtension -File $f) { continue }
+        if (-not (Test-IsAllowedForMerge -File $f)) { continue }
         if (Test-IsPreviewPngName $f.Name) { continue }
         if ($LimitToStyleFolders -and $LimitToStyleFolders.Count -gt 0) {
             $under = $false
@@ -3801,19 +3797,19 @@ function Get-MergePlan {
         }
     }
 
-    # Exclude configured filenames (preview PNGs already excluded in Get-ModAppendFileEntries)
-    # and non-mod editor/source extensions like .pdn / .psd / .bak.
+    # Allowlist: only final .dds texture files are merged. Anything else
+    # (preview PNG, .pdn / .psd source, .txt readme, .bak, etc.) is dropped.
     $filtered = New-Object System.Collections.Generic.List[object]
-    $extDrops = 0
+    $nonDdsDrops = 0
     foreach ($e in $sourceEntries) {
         if ($e.File.Name -in $script:ExcludedFileNames) { continue }
-        if (Test-IsExcludedByExtension -File $e.File) { $extDrops++; continue }
+        if (-not (Test-IsAllowedForMerge -File $e.File)) { $nonDdsDrops++; continue }
         $filtered.Add($e)
     }
     $excludedCount = $sourceEntries.Count - $filtered.Count
     if ($excludedCount -gt 0) {
-        $extPart = if ($extDrops -gt 0) { " (including $extDrops non-mod files like .pdn / .psd / .bak)" } else { '' }
-        Write-Log "Excluded $excludedCount source file(s) by filename/extension rules$extPart." $ColorWarn
+        $extPart = if ($nonDdsDrops -gt 0) { " ($nonDdsDrops non-.dds files like .pdn / .psd / .txt skipped — only .dds is copied)" } else { '' }
+        Write-Log "Excluded $excludedCount source file(s) by allowlist$extPart." $ColorWarn
     }
     Write-Log "Total source files: $($filtered.Count)" $ColorFg
 
@@ -3830,17 +3826,17 @@ function Get-MergePlan {
     $plan = New-Object System.Collections.Generic.List[object]
 
     if ($Mode -eq 'Replace') {
-        # Replace mode: scan all files (no style preview filter)
+        # Replace mode: allowlist final .dds textures only.
         $filtered = New-Object System.Collections.Generic.List[object]
         foreach ($f in @(Get-ChildItem -LiteralPath $SourceFolder -File -Recurse)) {
             if ($f.Name -in $script:ExcludedFileNames) { continue }
-            if (Test-IsExcludedByExtension -File $f) { continue }
+            if (-not (Test-IsAllowedForMerge -File $f)) { continue }
             $filtered.Add([pscustomobject]@{ File = $f; Root = $SourceFolder })
         }
         if ($src2Root) {
             foreach ($f in @(Get-ChildItem -LiteralPath $SourceFolder2 -File -Recurse)) {
                 if ($f.Name -in $script:ExcludedFileNames) { continue }
-                if (Test-IsExcludedByExtension -File $f) { continue }
+                if (-not (Test-IsAllowedForMerge -File $f)) { continue }
                 $filtered.Add([pscustomobject]@{ File = $f; Root = $SourceFolder2 })
             }
         }
