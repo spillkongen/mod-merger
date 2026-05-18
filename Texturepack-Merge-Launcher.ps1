@@ -24,7 +24,8 @@ if ($parseErrors) {
 try {
     Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue
     & $main
-    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    # WinForms closed normally — ignore robocopy/texconv exit codes from the merge.
+    exit 0
 }
 catch {
     $msg = $_.Exception.Message

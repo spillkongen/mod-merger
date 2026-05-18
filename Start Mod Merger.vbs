@@ -36,5 +36,5 @@ If exitCode <> 0 Then
         detail = detail & vbCrLf & vbCrLf & tf.ReadAll()
         tf.Close
     End If
-    MsgBox "Mod Merger did not start." & vbCrLf & vbCrLf & detail, vbCritical, "Mod Merger"
+    MsgBox "Mod Merger exited with an error (this is not normal after a successful merge)." & vbCrLf & vbCrLf & detail, vbCritical, "Mod Merger"
 End If

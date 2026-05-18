@@ -22,7 +22,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18z'
+$script:GuiBuildTag = '2026-05-18za'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -2890,7 +2890,7 @@ $folderCard.Controls.Add($outHint)
 Set-ThemedChildSurface $outHint
 
 # ---------- Merge actions (Step 3) — directly under folder picker so buttons stay visible ----------
-$script:ActionsCardHeight = 118
+$script:ActionsCardHeight = 132
 $actionsCardY = $contentTop + 122 + 228 + 12
 $actionsCard = New-ThemedPanel -Title 'Step 3  -  Run merge (download, convert, add to pack)'
 $actionsCard.Location = New-Object System.Drawing.Point(20, $actionsCardY)
@@ -2905,8 +2905,6 @@ $dryRunBox.Size = New-Object System.Drawing.Size(520, 22)
 $dryRunBox.ForeColor = $ColorFgDim
 $dryRunBox.Font = $FontHint
 $dryRunBox.Checked = $false
-$dryRunBox.UseVisualStyleBackColor = $false
-$dryRunBox.BackColor = [System.Drawing.Color]::Transparent
 $actionsCard.Controls.Add($dryRunBox)
 Set-ThemedChildSurface $dryRunBox
 $dryRunBox.Add_CheckedChanged({
@@ -2919,42 +2917,29 @@ $dryRunBox.Add_CheckedChanged({
     }
 })
 
-$runFeedbackLbl = New-Object System.Windows.Forms.Label
-$runFeedbackLbl.Text = 'Ready — fill folders above, then Run Full Merge.'
-$runFeedbackLbl.Location = New-Object System.Drawing.Point(12, 70)
-$runFeedbackLbl.Size = New-Object System.Drawing.Size(540, 20)
-$runFeedbackLbl.ForeColor = $ColorFgDim
-$runFeedbackLbl.Font = $FontHint
-$actionsCard.Controls.Add($runFeedbackLbl)
-Set-ThemedChildSurface $runFeedbackLbl
-
 $skipConfirmBox = New-Object System.Windows.Forms.CheckBox
 $skipConfirmBox.Text = 'Skip confirm popups  -  just run (uncheck to confirm each step)'
 $skipConfirmBox.Location = New-Object System.Drawing.Point(12, 48)
-$skipConfirmBox.Size = New-Object System.Drawing.Size(420, 22)
+$skipConfirmBox.Size = New-Object System.Drawing.Size(800, 22)
 $skipConfirmBox.ForeColor = $ColorAccent2
 $skipConfirmBox.Font = $FontHint
 $skipConfirmBox.Checked = $true
-$skipConfirmBox.UseVisualStyleBackColor = $false
-$skipConfirmBox.BackColor = [System.Drawing.Color]::Transparent
 $actionsCard.Controls.Add($skipConfirmBox)
 Set-ThemedChildSurface $skipConfirmBox
 
 $includeGbMergeBox = New-Object System.Windows.Forms.CheckBox
 $includeGbMergeBox.Text = 'Also download GameBanana mods (off = merge your two folders only)'
-$includeGbMergeBox.Location = New-Object System.Drawing.Point(280, 48)
-$includeGbMergeBox.Size = New-Object System.Drawing.Size(520, 22)
+$includeGbMergeBox.Location = New-Object System.Drawing.Point(12, 68)
+$includeGbMergeBox.Size = New-Object System.Drawing.Size(800, 22)
 $includeGbMergeBox.ForeColor = $ColorFgDim
 $includeGbMergeBox.Font = $FontHint
 $includeGbMergeBox.Checked = $false
-$includeGbMergeBox.UseVisualStyleBackColor = $false
-$includeGbMergeBox.BackColor = [System.Drawing.Color]::Transparent
 $actionsCard.Controls.Add($includeGbMergeBox)
 Set-ThemedChildSurface $includeGbMergeBox
 
 $scanBtn = New-Object System.Windows.Forms.Button
 $scanBtn.Text = 'Scan / Preview'
-$scanBtn.Location = New-Object System.Drawing.Point(430, 36)
+$scanBtn.Location = New-Object System.Drawing.Point(430, 92)
 $scanBtn.Size = New-Object System.Drawing.Size(130, 36)
 $scanBtn.Anchor = 'Top,Right'
 $scanBtn.FlatStyle = 'Flat'
@@ -2967,7 +2952,7 @@ $actionsCard.Controls.Add($scanBtn)
 
 $runBtn = New-Object System.Windows.Forms.Button
 $runBtn.Text = 'Run Full Merge'
-$runBtn.Location = New-Object System.Drawing.Point(568, 36)
+$runBtn.Location = New-Object System.Drawing.Point(568, 92)
 $runBtn.Size = New-Object System.Drawing.Size(140, 36)
 $runBtn.Anchor = 'Top,Right'
 $runBtn.FlatStyle = 'Flat'
@@ -2980,7 +2965,7 @@ $actionsCard.Controls.Add($runBtn)
 
 $clearBtn = New-Object System.Windows.Forms.Button
 $clearBtn.Text = 'Clear Log'
-$clearBtn.Location = New-Object System.Drawing.Point(716, 36)
+$clearBtn.Location = New-Object System.Drawing.Point(716, 92)
 $clearBtn.Size = New-Object System.Drawing.Size(120, 36)
 $clearBtn.Anchor = 'Top,Right'
 $clearBtn.FlatStyle = 'Flat'
@@ -2990,9 +2975,15 @@ $clearBtn.FlatAppearance.BorderColor = $ColorBorder
 $clearBtn.FlatAppearance.MouseOverBackColor = $ColorBorder
 $actionsCard.Controls.Add($clearBtn)
 
-$scanBtn.BringToFront()
-$runBtn.BringToFront()
-$clearBtn.BringToFront()
+# Status for merge — bottom of card, never overlaps buttons
+$runFeedbackLbl = New-Object System.Windows.Forms.Label
+$runFeedbackLbl.Text = 'Ready — fill folders above, then Run Full Merge.'
+$runFeedbackLbl.Location = New-Object System.Drawing.Point(12, 108)
+$runFeedbackLbl.Size = New-Object System.Drawing.Size(400, 18)
+$runFeedbackLbl.ForeColor = $ColorFgDim
+$runFeedbackLbl.Font = $FontHint
+$actionsCard.Controls.Add($runFeedbackLbl)
+Set-ThemedChildSurface $runFeedbackLbl
 
 # ---------- GameBanana downloader (Step 4 - optional) ----------
 $script:GbCardHeight = 118
@@ -3986,9 +3977,15 @@ function Invoke-Plan {
     $items = @($Plan)
     if ($items.Count -eq 0) { return }
 
-    Reset-GlowProgress -Bar $progress -Max $items.Count
+    $total = $items.Count
+    Reset-GlowProgress -Bar $progress -Max $total
+    Write-Log ("Copying $total file(s)... (progress updates every 100 files)") $ColorAccent
+    Set-Status "Merging 0 / $total..." $ColorFg
 
     $ok = 0; $fail = 0
+    $logEvery = if ($total -gt 500) { 100 } elseif ($total -gt 100) { 50 } else { 10 }
+    $uiEvery = if ($total -gt 200) { 25 } else { 5 }
+
     foreach ($p in $items) {
         try {
             $destFolder = Split-Path -Path $p.Destination -Parent
@@ -3997,14 +3994,17 @@ function Invoke-Plan {
             }
             Copy-Item -LiteralPath $p.Source.FullName -Destination $p.Destination -Force
             $ok++
-            Write-Log ("OK  {0}" -f $p.Destination) $ColorOk
+            if ($ok -eq 1 -or $ok % $logEvery -eq 0 -or $ok -eq $total) {
+                Write-Log ("  $ok / $total copied...") $ColorFgDim
+                Set-Status "Merging $ok / $total..." $ColorAccent2
+            }
         }
         catch {
             $fail++
             Write-Log ("ERR {0}  ({1})" -f $p.Destination, $_.Exception.Message) $ColorErr
         }
         Step-GlowProgress -Bar $progress
-        [System.Windows.Forms.Application]::DoEvents()
+        if ($ok % $uiEvery -eq 0) { [System.Windows.Forms.Application]::DoEvents() }
     }
 
     Write-Log ''
@@ -4419,8 +4419,9 @@ $runBtn.Add_Click({
         try { $skipConfirms = [bool]$skipConfirmBox.Checked } catch {}
         $includeGb = $false
         try { $includeGb = [bool]$includeGbMergeBox.Checked } catch {}
-        $runFeedbackLbl.Text = if ($dryRunBox.Checked) { 'Running dry run...' } else { 'Merging — watch the log below...' }
+        $runFeedbackLbl.Text = if ($dryRunBox.Checked) { 'Running dry run...' } else { 'Merging — see progress bar and log...' }
         $runFeedbackLbl.ForeColor = $ColorAccent
+        Set-Status 'Merge running...' $ColorAccent2
         Write-RunLogFile "Starting pipeline DryRun=$($dryRunBox.Checked) IncludeGB=$includeGb"
         Invoke-FullMergePipeline -Mode $mode -SourceFolder $src -BasePack $base -OutputFolder $out `
             -DryRun $dryRunBox.Checked -IncludeGameBanana $includeGb -SkipConfirm $skipConfirms
