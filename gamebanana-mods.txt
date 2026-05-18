@@ -1,0 +1,13 @@
+# GameBanana mods to download
+# ---------------------------------------------------------------
+# Keep this file in the SAME FOLDER as Start Mod Merger.vbs / the app.
+# Downloaded mod .zip files are saved in that same folder (works on any PC/path).
+#
+# One DIRECT download URL per line (not the mod page link).
+# GOOD:  https://gamebanana.com/dl/1234567
+# BAD:   https://gamebanana.com/mods/12345
+#
+# Lines starting with #, //, or ; are notes. Blank lines are OK.
+# ---------------------------------------------------------------
+
+# Paste your links below (one per line):

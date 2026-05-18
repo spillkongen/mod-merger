@@ -1,0 +1,6 @@
+_err.txt
+*.log
+_GameBananaCache/
+*_extracted/
+.DS_Store
+Thumbs.db
