@@ -22,7 +22,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18q'
+$script:GuiBuildTag = '2026-05-18s'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -225,6 +225,23 @@ $script:ExcludedFileNamesForMerge = @(
     'tex1_608x100_0c1c70378fb8cb46_6.dds',
     'tex1_224x29_175aea04816c34a7_2.dds'
 )
+
+# Non-mod / source / editor files that should never be copied into a pack.
+# .pdn = Paint.NET source, .psd/.psb = Photoshop source, .xcf = GIMP source,
+# .kra = Krita, .ai = Illustrator, .clip = Clip Studio, .sai/.sai2 = SAI,
+# .bak/.tmp/.old/.orig = backups, .db = thumbnail caches, .lnk = shortcuts.
+$script:ExcludedExtensionsForMerge = @(
+    '.pdn', '.psd', '.psb', '.xcf', '.kra', '.ai', '.clip', '.sai', '.sai2',
+    '.bak', '.tmp', '.old', '.orig',
+    '.db', '.ini', '.lnk', '.url'
+)
+
+function Test-IsExcludedByExtension {
+    param([Parameter(Mandatory)][System.IO.FileInfo]$File)
+    $ext = $File.Extension.ToLowerInvariant()
+    if ([string]::IsNullOrEmpty($ext)) { return $false }
+    return ($script:ExcludedExtensionsForMerge -contains $ext)
+}
 
 function Find-Texconv {
     if ($script:TexconvPath -and (Test-Path -LiteralPath $script:TexconvPath -PathType Leaf)) {
@@ -468,6 +485,7 @@ function Get-ModAppendFileEntries {
     $allFiles = @(Get-ChildItem -LiteralPath $ModRoot -File -Recurse -ErrorAction SilentlyContinue)
     foreach ($f in $allFiles) {
         if ($f.Name -in $script:ExcludedFileNamesForMerge) { continue }
+        if (Test-IsExcludedByExtension -File $f) { continue }
         if (Test-IsPreviewPngName $f.Name) { continue }
         if ($LimitToStyleFolders -and $LimitToStyleFolders.Count -gt 0) {
             $under = $false
@@ -2125,8 +2143,8 @@ function New-ThemedVScrollBar {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Mod Merger Download and Converter Tool'
-$form.Size = New-Object System.Drawing.Size(1060, 1020)
-$form.MinimumSize = New-Object System.Drawing.Size(960, 980)
+$form.Size = New-Object System.Drawing.Size(1060, 1040)
+$form.MinimumSize = New-Object System.Drawing.Size(960, 1000)
 $form.StartPosition = 'CenterScreen'
 $form.BackColor = $ColorBg
 $form.ForeColor = $ColorFg
@@ -2697,6 +2715,7 @@ function Update-MainLayout {
     }
     if ($modeCard) { $modeCard.Width = $contentW }
     if ($folderCard) { $folderCard.Width = $contentW }
+    if ($actionsCard) { $actionsCard.Width = $contentW }
     if ($gbCard) { $gbCard.Width = $contentW }
     if ($pngCard) { $pngCard.Width = $contentW }
     Update-FooterLayout -Cw $cw -Ch $ch
@@ -2871,10 +2890,73 @@ $srcHint2.Font = $FontHint
 $folderCard.Controls.Add($srcHint2)
 Set-ThemedChildSurface $srcHint2
 
-# ---------- GameBanana downloader (own row - not part of merge) ----------
+# ---------- Merge actions (Step 3) — directly under folder picker so buttons stay visible ----------
+$script:ActionsCardHeight = 78
+$actionsCardY = $contentTop + 122 + 228 + 12
+$actionsCard = New-ThemedPanel -Title 'Step 3  -  Run merge (download, convert, add to pack)'
+$actionsCard.Location = New-Object System.Drawing.Point(20, $actionsCardY)
+$actionsCard.Size = New-Object System.Drawing.Size(($form.ClientSize.Width - 40), $script:ActionsCardHeight)
+$actionsCard.Anchor = 'Top,Left,Right'
+$mainPanel.Controls.Add($actionsCard)
+
+$dryRunBox = New-Object System.Windows.Forms.CheckBox
+$dryRunBox.Text = 'Dry run  -  preview only, do not copy any files'
+$dryRunBox.Location = New-Object System.Drawing.Point(12, 32)
+$dryRunBox.Size = New-Object System.Drawing.Size(400, 26)
+$dryRunBox.ForeColor = $ColorFg
+$dryRunBox.Font = $FontBold
+$dryRunBox.Checked = $true
+$dryRunBox.UseVisualStyleBackColor = $false
+$dryRunBox.BackColor = [System.Drawing.Color]::Transparent
+$actionsCard.Controls.Add($dryRunBox)
+Set-ThemedChildSurface $dryRunBox
+
+$scanBtn = New-Object System.Windows.Forms.Button
+$scanBtn.Text = 'Scan / Preview'
+$scanBtn.Location = New-Object System.Drawing.Point(430, 28)
+$scanBtn.Size = New-Object System.Drawing.Size(130, 36)
+$scanBtn.Anchor = 'Top,Right'
+$scanBtn.FlatStyle = 'Flat'
+$scanBtn.BackColor = $ColorBgAlt
+$scanBtn.ForeColor = $ColorFg
+$scanBtn.FlatAppearance.BorderColor = $ColorAccent2
+$scanBtn.FlatAppearance.MouseOverBackColor = $ColorBorder
+$scanBtn.Font = $FontBold
+$actionsCard.Controls.Add($scanBtn)
+
+$runBtn = New-Object System.Windows.Forms.Button
+$runBtn.Text = 'Run Full Merge'
+$runBtn.Location = New-Object System.Drawing.Point(568, 28)
+$runBtn.Size = New-Object System.Drawing.Size(140, 36)
+$runBtn.Anchor = 'Top,Right'
+$runBtn.FlatStyle = 'Flat'
+$runBtn.BackColor = $ColorAccent
+$runBtn.ForeColor = [System.Drawing.Color]::FromArgb(20,14,8)
+$runBtn.FlatAppearance.BorderColor = $ColorAccentHover
+$runBtn.FlatAppearance.MouseOverBackColor = $ColorAccentHover
+$runBtn.Font = $FontBold
+$actionsCard.Controls.Add($runBtn)
+
+$clearBtn = New-Object System.Windows.Forms.Button
+$clearBtn.Text = 'Clear Log'
+$clearBtn.Location = New-Object System.Drawing.Point(716, 28)
+$clearBtn.Size = New-Object System.Drawing.Size(120, 36)
+$clearBtn.Anchor = 'Top,Right'
+$clearBtn.FlatStyle = 'Flat'
+$clearBtn.BackColor = $ColorBgAlt
+$clearBtn.ForeColor = $ColorFg
+$clearBtn.FlatAppearance.BorderColor = $ColorBorder
+$clearBtn.FlatAppearance.MouseOverBackColor = $ColorBorder
+$actionsCard.Controls.Add($clearBtn)
+
+$scanBtn.BringToFront()
+$runBtn.BringToFront()
+$clearBtn.BringToFront()
+
+# ---------- GameBanana downloader (Step 4 - optional) ----------
 $script:GbCardHeight = 118
 $script:PngCardHeight = 146
-$gbCardY = $contentTop + 352
+$gbCardY = $actionsCardY + $script:ActionsCardHeight + 12
 $gbCard = New-ThemedPanel -Title 'GameBanana downloader  -  optional, separate from merge'
 $gbCard.Location = New-Object System.Drawing.Point(20, $gbCardY)
 $gbCard.Size = New-Object System.Drawing.Size(($form.ClientSize.Width - 40), $script:GbCardHeight)
@@ -3025,68 +3107,7 @@ $pngBrowseBtn.BringToFront()
 $pngPreviewBtn.BringToFront()
 $convertPngBtn.BringToFront()
 
-# ---------- Merge actions (Step 3) ----------
-$actionsY = $pngCardY + $script:PngCardHeight + 14
-$script:MainContentHeight = $actionsY + 52
-
-# Semi-transparent backing strip for the dry-run checkbox so it stays readable on the busy art
-$dryRunBacking = New-ThemedPanel -Title ''
-$dryRunBacking.Location = New-Object System.Drawing.Point(20, ($actionsY - 4))
-$dryRunBacking.Size = New-Object System.Drawing.Size(420, 34)
-$mainPanel.Controls.Add($dryRunBacking)
-
-$dryRunBox = New-Object System.Windows.Forms.CheckBox
-$dryRunBox.Text = 'Dry run  -  preview only, do not copy any files'
-$dryRunBox.Location = New-Object System.Drawing.Point(10, 4)
-$dryRunBox.Size = New-Object System.Drawing.Size(400, 26)
-$dryRunBox.ForeColor = $ColorFg
-$dryRunBox.Font = $FontBold
-$dryRunBox.Checked = $true
-$dryRunBacking.Controls.Add($dryRunBox)
-Set-ThemedChildSurface $dryRunBox
-
-$scanBtn = New-Object System.Windows.Forms.Button
-$scanBtn.Text = 'Scan / Preview'
-$scanBtn.Location = New-Object System.Drawing.Point(450, ($actionsY - 4))
-$scanBtn.Size = New-Object System.Drawing.Size(140, 34)
-$scanBtn.Anchor = 'Top,Right'
-$scanBtn.FlatStyle = 'Flat'
-$scanBtn.BackColor = $ColorBgAlt
-$scanBtn.ForeColor = $ColorFg
-$scanBtn.FlatAppearance.BorderColor = $ColorAccent2
-$scanBtn.FlatAppearance.MouseOverBackColor = $ColorBorder
-$scanBtn.Font = $FontBold
-$mainPanel.Controls.Add($scanBtn)
-
-$runBtn = New-Object System.Windows.Forms.Button
-$runBtn.Text = 'Run Full Merge'
-$runBtn.Location = New-Object System.Drawing.Point(600, ($actionsY - 4))
-$runBtn.Size = New-Object System.Drawing.Size(140, 34)
-$runBtn.Anchor = 'Top,Right'
-$runBtn.FlatStyle = 'Flat'
-$runBtn.BackColor = $ColorAccent
-$runBtn.ForeColor = [System.Drawing.Color]::FromArgb(20,14,8)
-$runBtn.FlatAppearance.BorderColor = $ColorAccentHover
-$runBtn.FlatAppearance.MouseOverBackColor = $ColorAccentHover
-$runBtn.Font = $FontBold
-$mainPanel.Controls.Add($runBtn)
-
-$clearBtn = New-Object System.Windows.Forms.Button
-$clearBtn.Text = 'Clear Log'
-$clearBtn.Location = New-Object System.Drawing.Point(750, ($actionsY - 4))
-$clearBtn.Size = New-Object System.Drawing.Size(130, 34)
-$clearBtn.Anchor = 'Top,Right'
-$clearBtn.FlatStyle = 'Flat'
-$clearBtn.BackColor = $ColorBgAlt
-$clearBtn.ForeColor = $ColorFg
-$clearBtn.FlatAppearance.BorderColor = $ColorBorder
-$clearBtn.FlatAppearance.MouseOverBackColor = $ColorBorder
-$mainPanel.Controls.Add($clearBtn)
-
-$dryRunBacking.BringToFront()
-$scanBtn.BringToFront()
-$runBtn.BringToFront()
-$clearBtn.BringToFront()
+$script:MainContentHeight = $pngCardY + $script:PngCardHeight + 12
 
 if ($mainPanel) {
     $mainPanel.Height = $script:MainContentHeight
@@ -3781,13 +3802,18 @@ function Get-MergePlan {
     }
 
     # Exclude configured filenames (preview PNGs already excluded in Get-ModAppendFileEntries)
+    # and non-mod editor/source extensions like .pdn / .psd / .bak.
     $filtered = New-Object System.Collections.Generic.List[object]
+    $extDrops = 0
     foreach ($e in $sourceEntries) {
-        if ($e.File.Name -notin $script:ExcludedFileNames) { $filtered.Add($e) }
+        if ($e.File.Name -in $script:ExcludedFileNames) { continue }
+        if (Test-IsExcludedByExtension -File $e.File) { $extDrops++; continue }
+        $filtered.Add($e)
     }
     $excludedCount = $sourceEntries.Count - $filtered.Count
     if ($excludedCount -gt 0) {
-        Write-Log "Excluded $excludedCount source file(s) by configured filename exclusions." $ColorWarn
+        $extPart = if ($extDrops -gt 0) { " (including $extDrops non-mod files like .pdn / .psd / .bak)" } else { '' }
+        Write-Log "Excluded $excludedCount source file(s) by filename/extension rules$extPart." $ColorWarn
     }
     Write-Log "Total source files: $($filtered.Count)" $ColorFg
 
@@ -3807,15 +3833,15 @@ function Get-MergePlan {
         # Replace mode: scan all files (no style preview filter)
         $filtered = New-Object System.Collections.Generic.List[object]
         foreach ($f in @(Get-ChildItem -LiteralPath $SourceFolder -File -Recurse)) {
-            if ($f.Name -notin $script:ExcludedFileNames) {
-                $filtered.Add([pscustomobject]@{ File = $f; Root = $SourceFolder })
-            }
+            if ($f.Name -in $script:ExcludedFileNames) { continue }
+            if (Test-IsExcludedByExtension -File $f) { continue }
+            $filtered.Add([pscustomobject]@{ File = $f; Root = $SourceFolder })
         }
         if ($src2Root) {
             foreach ($f in @(Get-ChildItem -LiteralPath $SourceFolder2 -File -Recurse)) {
-                if ($f.Name -notin $script:ExcludedFileNames) {
-                    $filtered.Add([pscustomobject]@{ File = $f; Root = $SourceFolder2 })
-                }
+                if ($f.Name -in $script:ExcludedFileNames) { continue }
+                if (Test-IsExcludedByExtension -File $f) { continue }
+                $filtered.Add([pscustomobject]@{ File = $f; Root = $SourceFolder2 })
             }
         }
         # Build name -> chosen entry map. If duplicates across sources, ask which to use.
