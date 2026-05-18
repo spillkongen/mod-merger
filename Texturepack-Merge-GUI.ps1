@@ -22,7 +22,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18y'
+$script:GuiBuildTag = '2026-05-18z'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -2940,6 +2940,18 @@ $skipConfirmBox.BackColor = [System.Drawing.Color]::Transparent
 $actionsCard.Controls.Add($skipConfirmBox)
 Set-ThemedChildSurface $skipConfirmBox
 
+$includeGbMergeBox = New-Object System.Windows.Forms.CheckBox
+$includeGbMergeBox.Text = 'Also download GameBanana mods (off = merge your two folders only)'
+$includeGbMergeBox.Location = New-Object System.Drawing.Point(280, 48)
+$includeGbMergeBox.Size = New-Object System.Drawing.Size(520, 22)
+$includeGbMergeBox.ForeColor = $ColorFgDim
+$includeGbMergeBox.Font = $FontHint
+$includeGbMergeBox.Checked = $false
+$includeGbMergeBox.UseVisualStyleBackColor = $false
+$includeGbMergeBox.BackColor = [System.Drawing.Color]::Transparent
+$actionsCard.Controls.Add($includeGbMergeBox)
+Set-ThemedChildSurface $includeGbMergeBox
+
 $scanBtn = New-Object System.Windows.Forms.Button
 $scanBtn.Text = 'Scan / Preview'
 $scanBtn.Location = New-Object System.Drawing.Point(430, 36)
@@ -3173,10 +3185,20 @@ $logBox = $script:glassLog
 
 $form.Add_Load({
     if ($script:glassLog) { $script:glassLog.Invalidate() }
+    $app = Get-ModMergerAppFolder
     if ($gbLinksBox) {
-        $p = Ensure-GameBananaLinksFile -Root (Get-ModMergerAppFolder)
+        $p = Ensure-GameBananaLinksFile -Root $app
         if ([string]::IsNullOrWhiteSpace($gbLinksBox.Text)) { $gbLinksBox.Text = $p }
     }
+    if ($dstBox -and [string]::IsNullOrWhiteSpace($dstBox.Text)) {
+        $gz2 = Join-Path $app 'GZ2'
+        if (Test-Path -LiteralPath $gz2 -PathType Container) { $dstBox.Text = $gz2 }
+    }
+    if ($srcBox -and [string]::IsNullOrWhiteSpace($srcBox.Text)) {
+        $tphd = Join-Path $app 'tphd'
+        if (Test-Path -LiteralPath $tphd -PathType Container) { $srcBox.Text = $tphd }
+    }
+    Write-Log ("Build $($script:GuiBuildTag) — folders auto-filled from app folder when present.") $ColorFgDim
 })
 $form.Add_Resize({ if ($script:glassLog) { $script:glassLog.Invalidate() } })
 $logCard.Add_Resize({ if ($script:glassLog) { $script:glassLog.Invalidate() } })
@@ -3267,12 +3289,28 @@ $aboutBtn.Add_Click({ Show-AboutTool })
 # Logging helpers
 # ---------------------------------------------------------------------------
 
+function Write-RunLogFile {
+    param([string]$Message)
+    try {
+        $path = Join-Path (Get-ModMergerAppFolder) 'merge-run.log'
+        $line = '[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
+        Add-Content -LiteralPath $path -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch { }
+}
+
 function Write-Log {
     param([string]$Message, [System.Drawing.Color]$Color = $ColorFg)
     if ($script:glassLog) {
         $script:glassLog.AppendLine($Message, $Color)
     }
     [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Test-FolderHasTexPng {
+    param([string]$Folder)
+    if ([string]::IsNullOrWhiteSpace($Folder) -or -not (Test-Path -LiteralPath $Folder)) { return $false }
+    $root = Resolve-ModContentRoot -ExtractedFolder $Folder
+    return [bool](Get-ChildItem -LiteralPath $root -Filter 'tex*.png' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
 }
 
 function Set-Status {
@@ -4099,11 +4137,21 @@ function Initialize-OutputFromBase {
             if ($LogFn) { & $LogFn "Created output folder: $OutputFolder" 'ok' }
         }
     }
+    $alreadyHas = @(Get-ChildItem -LiteralPath $OutputFolder -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($alreadyHas.Count -gt 0) {
+        if ($LogFn) { & $LogFn 'Output folder already has files — skipping base-pack copy.' 'dim' }
+        return $OutputFolder
+    }
     if ($DryRun) {
         if ($LogFn) { & $LogFn "Dry run: would copy base pack -> output folder ($BasePack -> $OutputFolder)" 'warn' }
         return $OutputFolder
     }
-    if ($LogFn) { & $LogFn "Seeding output folder from base pack (this may take a moment)..." 'accent' }
+    $baseFileCount = @(Get-ChildItem -LiteralPath $BasePack -File -Recurse -ErrorAction SilentlyContinue).Count
+    if ($LogFn) {
+        & $LogFn "Copying base pack into output folder (~$baseFileCount files — can take several minutes)..." 'warn'
+        & $LogFn 'Please wait — the log will update when copy finishes.' 'dim'
+    }
+    [System.Windows.Forms.Application]::DoEvents()
     try {
         $rcArgs = @($BasePack, $OutputFolder, '/E', '/COPY:DAT', '/R:1', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS', '/nc', '/ns', '/np')
         $null = & robocopy @rcArgs 2>&1
@@ -4172,35 +4220,23 @@ function Invoke-FullMergePipeline {
     if ($DryRun) {
         Write-Log '*** DRY RUN ON — nothing will be written to disk. Uncheck "Dry run only" to merge for real. ***' $ColorWarn
     } else {
-        Write-Log 'Live merge — files will be downloaded, converted, and copied.' $ColorOk
-    }
-
-    if ($linksPath) {
-        Write-Log '=== Step 1/5: Download GameBanana mods (links file) ===' $ColorAccent
-        Set-Status 'Downloading GameBanana mods...' $ColorAccent2
-        if ($DryRun) {
-            $n = @(Get-GameBananaLinksFromFile -Path $linksPath).Count
-            $dlHint = Get-GameBananaDownloadFolder
-            Write-Log ("Dry run: would download $n mod(s) to app folder: $dlHint") $ColorWarn
-        } else {
-            $gbDownloads = @(Invoke-GameBananaDownloadToCache -LinksFile $linksPath -DownloadFolder (Get-GameBananaDownloadFolder) -LogFn $logFn -ProgressBar $progress)
-        }
-    } else {
-        Write-Log '=== Step 1/5: GameBanana - skipped (no links file) ===' $ColorFgDim
+        Write-Log 'Live merge — files will be copied to your target folder.' $ColorOk
     }
 
     $src1StyleFolders = @()
 
-    Write-Log '=== Step 2/5: Convert PNG -> DDS in "Add from" source ===' $ColorAccent
+    Write-Log '=== Step 1/3: Convert PNG -> DDS in "Add from" (if needed) ===' $ColorAccent
     Set-Status 'Converting PNG in source...' $ColorFg
     if ($DryRun) {
         Write-Log 'Dry run: would convert PNGs in source folder with texconv.' $ColorWarn
-    } else {
+    } elseif (Test-FolderHasTexPng -Folder $SourceFolder) {
         $r1 = Invoke-PngToDdsForFolder -Folder $SourceFolder -LogFn $logFn -ProgressBar $progress -PromptForStyle $true
         $src1StyleFolders = @($r1.SelectedStyleFolders)
+    } else {
+        Write-Log 'No tex*.png in source — skipping PNG conversion (using existing .dds files).' $ColorFgDim
     }
 
-    Write-Log '=== Step 3/5: Merge "Add from" into target ===' $ColorAccent
+    Write-Log '=== Step 2/3: Merge "Add from" into target ===' $ColorAccent
     Set-Status 'Building merge plan...' $ColorFg
     $plan = Get-MergePlan -SourceFolder $SourceFolder -SourceFolder2 '' -TargetFolder $TargetFolder -Mode $Mode `
         -Source1StyleFolders $src1StyleFolders -Source2StyleFolders @()
@@ -4238,24 +4274,30 @@ function Invoke-FullMergePipeline {
         }
     }
 
-    Write-Log '=== Step 4/5: Convert PNG -> DDS in destination ===' $ColorAccent
+    Write-Log '=== Step 3/3: Convert PNG -> DDS in destination (if needed) ===' $ColorAccent
     Set-Status 'Converting PNG in destination...' $ColorFg
     if ($DryRun) {
         Write-Log 'Dry run: would convert PNGs in destination with texconv.' $ColorWarn
-    } else {
+    } elseif (Test-FolderHasTexPng -Folder $TargetFolder) {
         [void](Invoke-PngToDdsForFolder -Folder $TargetFolder -LogFn $logFn -ProgressBar $progress -PromptForStyle $true)
+    } else {
+        Write-Log 'No tex*.png in destination — skipping PNG conversion.' $ColorFgDim
     }
 
     if ($linksPath) {
-        Write-Log '=== Step 5/5: Unzip GameBanana mods -> PNG to DDS -> append into destination ===' $ColorAccent
-        Set-Status 'Extracting and merging GameBanana mods...' $ColorFg
+        Write-Log '=== Optional: GameBanana mods ===' $ColorAccent
+        Set-Status 'Downloading GameBanana mods...' $ColorAccent2
         if ($DryRun) {
-            Write-Log 'Dry run: would unzip cached mods, convert PNGs, append missing files.' $ColorWarn
+            $n = @(Get-GameBananaLinksFromFile -Path $linksPath).Count
+            Write-Log ("Dry run: would download $n mod(s), unzip, and append.") $ColorWarn
         } else {
+            $gbDownloads = @(Invoke-GameBananaDownloadToCache -LinksFile $linksPath -DownloadFolder (Get-GameBananaDownloadFolder) -LogFn $logFn -ProgressBar $progress)
+            Write-Log 'Unzipping GameBanana mods -> PNG to DDS -> append...' $ColorAccent
+            Set-Status 'Extracting and merging GameBanana mods...' $ColorFg
             Invoke-GameBananaExtractAndMerge -TargetFolder $TargetFolder -DownloadFolder (Get-GameBananaDownloadFolder) -LogFn $logFn -ProgressBar $progress -DownloadedFiles $gbDownloads
         }
     } else {
-        Write-Log '=== Step 5/5: GameBanana extract/merge - skipped ===' $ColorFgDim
+        Write-Log 'GameBanana: skipped (checkbox off or no links file).' $ColorFgDim
     }
 
     Write-Log ''
@@ -4324,13 +4366,16 @@ $scanBtn.Add_Click((Wrap-SafeUiEvent {
     }
 }))
 
-$runBtn.Add_Click((Wrap-SafeUiEvent {
+$runBtn.Add_Click({
+    Write-RunLogFile "=== Run Full Merge clicked (build $($script:GuiBuildTag)) ==="
+    try { $form.Activate() } catch {}
     $runFeedbackLbl.Text = 'Run clicked — checking folders...'
     $runFeedbackLbl.ForeColor = $ColorAccent2
     [System.Windows.Forms.Application]::DoEvents()
     Set-Status 'Validating inputs...' $ColorFg
     if (-not (Test-Inputs)) {
-        $runFeedbackLbl.Text = 'Stopped — fix the folder paths (see popup or log).'
+        Write-RunLogFile 'Stopped: input validation failed'
+        $runFeedbackLbl.Text = 'Stopped — fix folder paths (see popup or log).'
         $runFeedbackLbl.ForeColor = $ColorWarn
         Set-Status 'Stopped — fix the input shown in the popup.' $ColorWarn
         return
@@ -4346,14 +4391,15 @@ $runBtn.Add_Click((Wrap-SafeUiEvent {
         $mode = Get-SelectedMode
         Write-Log ("Mode: $mode") $ColorAccent
         if ($dryRunBox.Checked) {
-            Write-Log 'WARNING: Dry run is ON — you will NOT see any files change on disk!' $ColorWarn
+            Write-Log 'WARNING: Dry run is ON — no files will change on disk!' $ColorWarn
         }
-        Write-Log 'Pipeline: download -> PNG to DDS -> merge folders -> unzip mods -> append.' $ColorFgDim
+        Write-Log 'Order: merge folders first, then optional GameBanana.' $ColorFgDim
 
         $src = (Resolve-Path -LiteralPath $srcBox.Text).Path
         $base = (Resolve-Path -LiteralPath $dstBox.Text).Path
         Write-Log ("Base pack:   $base") $ColorFg
         Write-Log ("Add from:    $src") $ColorFg
+        Write-RunLogFile "Base=$base AddFrom=$src"
         $out = ''
         if (-not [string]::IsNullOrWhiteSpace($outBox.Text)) {
             $outRaw = $outBox.Text.Trim()
@@ -4362,47 +4408,47 @@ $runBtn.Add_Click((Wrap-SafeUiEvent {
             } else {
                 $out = $outRaw
             }
-        }
-
-        Write-Log ("Base pack:   $base") $ColorFgDim
-        Write-Log ("Add from:    $src") $ColorFgDim
-        if ($out) {
-            Write-Log ("Output:      $out") $ColorFgDim
+            Write-Log ("Output:      $out") $ColorFg
+            Write-RunLogFile "Output=$out"
         } else {
             Write-Log 'Output:      (in place — base pack will be modified)' $ColorWarn
+            Write-RunLogFile 'Output=(in place)'
         }
 
         $skipConfirms = $false
         try { $skipConfirms = [bool]$skipConfirmBox.Checked } catch {}
-        $runFeedbackLbl.Text = if ($dryRunBox.Checked) { 'Running dry run (preview only)...' } else { 'Merging — watch the log below...' }
+        $includeGb = $false
+        try { $includeGb = [bool]$includeGbMergeBox.Checked } catch {}
+        $runFeedbackLbl.Text = if ($dryRunBox.Checked) { 'Running dry run...' } else { 'Merging — watch the log below...' }
         $runFeedbackLbl.ForeColor = $ColorAccent
+        Write-RunLogFile "Starting pipeline DryRun=$($dryRunBox.Checked) IncludeGB=$includeGb"
         Invoke-FullMergePipeline -Mode $mode -SourceFolder $src -BasePack $base -OutputFolder $out `
-            -DryRun $dryRunBox.Checked -IncludeGameBanana $true -SkipConfirm $skipConfirms
+            -DryRun $dryRunBox.Checked -IncludeGameBanana $includeGb -SkipConfirm $skipConfirms
+        Write-RunLogFile 'Pipeline finished OK'
         if ($dryRunBox.Checked) {
             $runFeedbackLbl.Text = 'Dry run done — no files changed. Uncheck Dry run to merge for real.'
             $runFeedbackLbl.ForeColor = $ColorWarn
         } else {
-            $runFeedbackLbl.Text = 'Merge finished — check log and your base/output folder.'
+            $runFeedbackLbl.Text = 'Merge finished — check log and your folder.'
             $runFeedbackLbl.ForeColor = $ColorOk
         }
     }
     catch {
+        Write-RunLogFile "ERROR: $($_.Exception.Message)"
         Write-Log ("ERROR: $($_.Exception.Message)") $ColorErr
         if ($_.ScriptStackTrace) { Write-Log $_.ScriptStackTrace $ColorFgDim }
         $runFeedbackLbl.Text = "Error: $($_.Exception.Message)"
         $runFeedbackLbl.ForeColor = $ColorErr
         Set-Status 'Error - see log.' $ColorErr
-        try {
-            [System.Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Run Full Merge failed',
-                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-        } catch { }
+        [void][System.Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Run Full Merge failed',
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
     finally {
         $gbDownloadBtn.Enabled = $true
         $convertPngBtn.Enabled = $true
         $scanBtn.Enabled = $true; $runBtn.Enabled = $true; $testBarBtn.Enabled = $true; $isoInstallBtn.Enabled = $true; $aboutBtn.Enabled = $true
     }
-}))
+})
 
 Write-Log 'Twilight Texture Pack Merger ready.' $ColorAccent
 Write-Log ("App folder (links .txt + mod downloads): $(Get-ModMergerAppFolder)") $ColorFgDim
@@ -4410,7 +4456,8 @@ Write-Log 'Append mode: "Add from" supplies missing files. Set "Output folder" t
 Write-Log 'Run Full Merge: GameBanana download -> PNG to DDS -> merge folders -> unzip mods -> append to finished mod.' $ColorFg
 Write-Log 'Scan/Preview: plan only. PNG to DDS row: convert any folder manually with texconv.' $ColorFg
 Write-Log 'GameBanana button: download+merge mods alone (no folder merge).' $ColorFg
-Write-Log 'Drag the title strip to move. Opacity slider top-right. Keep Dry run on until you preview.' $ColorFg
+Write-Log 'Drag the title strip to move. Dry run OFF = real merge. GameBanana is optional (checkbox in Step 3).' $ColorFg
+Write-Log ("Diagnostic log file: $(Join-Path (Get-ModMergerAppFolder) 'merge-run.log')") $ColorFgDim
 
 try {
     [Console]::TreatControlCAsInput = $false
