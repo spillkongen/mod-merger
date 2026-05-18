@@ -22,7 +22,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18u'
+$script:GuiBuildTag = '2026-05-18v'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -3946,27 +3946,36 @@ function Invoke-Plan {
 # Validation
 # ---------------------------------------------------------------------------
 
+function Show-InputWarning {
+    param([string]$Msg, [string]$Title, [string]$Icon = 'Warning')
+    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+        $color = if ($Icon -eq 'Error') { $ColorErr } else { $ColorWarn }
+        Write-Log ("Cannot start: $Msg") $color
+    }
+    [System.Windows.Forms.MessageBox]::Show($form, $Msg, $Title, 'OK', $Icon) | Out-Null
+}
+
 function Test-Inputs {
     if ([string]::IsNullOrWhiteSpace($srcBox.Text)) {
-        [System.Windows.Forms.MessageBox]::Show('Please select a source folder.', 'Missing source', 'OK', 'Warning') | Out-Null
+        Show-InputWarning -Msg 'Please fill "2. Add from" — the pack that supplies missing files.' -Title 'Missing "Add from"'
         return $false
     }
     if ([string]::IsNullOrWhiteSpace($dstBox.Text)) {
-        [System.Windows.Forms.MessageBox]::Show('Please select a destination folder.', 'Missing destination', 'OK', 'Warning') | Out-Null
+        Show-InputWarning -Msg 'Please fill "1. Base pack" — your starting pack.' -Title 'Missing base pack'
         return $false
     }
     if (-not (Test-Path -LiteralPath $srcBox.Text -PathType Container)) {
-        [System.Windows.Forms.MessageBox]::Show("Source folder not found:`n$($srcBox.Text)", 'Source not found', 'OK', 'Error') | Out-Null
+        Show-InputWarning -Msg "'Add from' folder not found:`n$($srcBox.Text)" -Title '"Add from" not found' -Icon 'Error'
         return $false
     }
     if (-not (Test-Path -LiteralPath $dstBox.Text -PathType Container)) {
-        [System.Windows.Forms.MessageBox]::Show("Destination folder not found:`n$($dstBox.Text)", 'Destination not found', 'OK', 'Error') | Out-Null
+        Show-InputWarning -Msg "Base pack folder not found:`n$($dstBox.Text)" -Title 'Base pack not found' -Icon 'Error'
         return $false
     }
     $srcResolved = (Resolve-Path -LiteralPath $srcBox.Text).Path
     $dstResolved = (Resolve-Path -LiteralPath $dstBox.Text).Path
     if ([string]::Equals($srcResolved, $dstResolved, [System.StringComparison]::OrdinalIgnoreCase)) {
-        [System.Windows.Forms.MessageBox]::Show('Source and destination folders must be different.', 'Same folder', 'OK', 'Warning') | Out-Null
+        Show-InputWarning -Msg '"Base pack" and "Add from" must be different folders.' -Title 'Same folder'
         return $false
     }
     # Output folder is optional. If set it cannot equal "Add from" (source).
@@ -3976,7 +3985,7 @@ function Test-Inputs {
         if (Test-Path -LiteralPath $outRaw -PathType Container) {
             $outResolved = (Resolve-Path -LiteralPath $outRaw).Path
             if ([string]::Equals($outResolved, $srcResolved, [System.StringComparison]::OrdinalIgnoreCase)) {
-                [System.Windows.Forms.MessageBox]::Show('Output folder must be different from the "Add from" source.', 'Same folder', 'OK', 'Warning') | Out-Null
+                Show-InputWarning -Msg 'Output folder must be different from the "Add from" source.' -Title 'Same folder'
                 return $false
             }
         }
@@ -3984,11 +3993,11 @@ function Test-Inputs {
             try {
                 $parent = Split-Path -Path $outRaw -Parent
                 if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
-                    [System.Windows.Forms.MessageBox]::Show("Output folder parent does not exist:`n$parent", 'Output folder', 'OK', 'Error') | Out-Null
+                    Show-InputWarning -Msg "Output folder parent does not exist:`n$parent" -Title 'Output folder' -Icon 'Error'
                     return $false
                 }
             } catch {
-                [System.Windows.Forms.MessageBox]::Show("Output folder path is not valid:`n$outRaw", 'Output folder', 'OK', 'Error') | Out-Null
+                Show-InputWarning -Msg "Output folder path is not valid:`n$outRaw" -Title 'Output folder' -Icon 'Error'
                 return $false
             }
         }
@@ -4211,9 +4220,14 @@ function Invoke-FullMergePipeline {
 }
 
 $scanBtn.Add_Click((Wrap-SafeUiEvent {
-    if (-not (Test-Inputs)) { }
-    else {
+    Write-Log '=== Scan / Preview clicked ===' $ColorAccent
+    Set-Status 'Validating inputs...' $ColorFg
+    if (-not (Test-Inputs)) {
+        Set-Status 'Stopped — fix the input shown in the popup.' $ColorWarn
+        return
+    }
     if ($script:glassLog) { $script:glassLog.ClearLines() }
+    Write-Log '=== Scan / Preview ===' $ColorAccent
     Reset-GlowProgress -Bar $progress -Max 100
     $convertPngBtn.Enabled = $false
     $scanBtn.Enabled = $false; $runBtn.Enabled = $false; $testBarBtn.Enabled = $false; $isoInstallBtn.Enabled = $false; $aboutBtn.Enabled = $false
@@ -4253,13 +4267,17 @@ $scanBtn.Add_Click((Wrap-SafeUiEvent {
         $convertPngBtn.Enabled = $true
         $scanBtn.Enabled = $true; $runBtn.Enabled = $true; $gbDownloadBtn.Enabled = $true; $testBarBtn.Enabled = $true; $isoInstallBtn.Enabled = $true; $aboutBtn.Enabled = $true
     }
-    }
 }))
 
 $runBtn.Add_Click((Wrap-SafeUiEvent {
-    if (-not (Test-Inputs)) { }
-    else {
+    Write-Log '=== Run Full Merge clicked ===' $ColorAccent
+    Set-Status 'Validating inputs...' $ColorFg
+    if (-not (Test-Inputs)) {
+        Set-Status 'Stopped — fix the input shown in the popup.' $ColorWarn
+        return
+    }
     if ($script:glassLog) { $script:glassLog.ClearLines() }
+    Write-Log '=== Run Full Merge ===' $ColorAccent
     Reset-GlowProgress -Bar $progress -Max 100
     $scanBtn.Enabled = $false; $runBtn.Enabled = $false; $testBarBtn.Enabled = $false; $isoInstallBtn.Enabled = $false; $aboutBtn.Enabled = $false
     $gbDownloadBtn.Enabled = $false
@@ -4281,6 +4299,14 @@ $runBtn.Add_Click((Wrap-SafeUiEvent {
             }
         }
 
+        Write-Log ("Base pack:   $base") $ColorFgDim
+        Write-Log ("Add from:    $src") $ColorFgDim
+        if ($out) {
+            Write-Log ("Output:      $out") $ColorFgDim
+        } else {
+            Write-Log 'Output:      (in place — base pack will be modified)' $ColorWarn
+        }
+
         Invoke-FullMergePipeline -Mode $mode -SourceFolder $src -BasePack $base -OutputFolder $out `
             -DryRun $dryRunBox.Checked -IncludeGameBanana $true
     }
@@ -4293,7 +4319,6 @@ $runBtn.Add_Click((Wrap-SafeUiEvent {
         $gbDownloadBtn.Enabled = $true
         $convertPngBtn.Enabled = $true
         $scanBtn.Enabled = $true; $runBtn.Enabled = $true; $testBarBtn.Enabled = $true; $isoInstallBtn.Enabled = $true; $aboutBtn.Enabled = $true
-    }
     }
 }))
 
