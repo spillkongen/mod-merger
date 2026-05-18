@@ -21,7 +21,8 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18zd'
+$script:GuiBuildTag = '2026-05-18ze'
+$script:SuppressLogFileWrite = $false
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -52,8 +53,8 @@ function Wrap-SafeUiEvent {
             catch {
                 if (-not (Test-IsPipelineStopped $_)) {
                     try {
-                        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                            Write-Log ("UI event: $($_.Exception.Message)") $ColorErr
+                        if (Get-Command Write-ErrorLog -ErrorAction SilentlyContinue) {
+                            Write-ErrorLog -Message $_.Exception.Message -Title 'UI event'
                         }
                     } catch { }
                 }
@@ -86,8 +87,12 @@ public static class NativeConsole {
 $script:UiThreadExceptionHandler = {
     param($sender, $e)
     $ex = $e.Exception
-    if ($ex -is [System.Management.Automation.PipelineStoppedException]) { }
-    elseif ($ex.Message -match 'pipeline has been stopped') { }
+    if ($ex -is [System.Management.Automation.PipelineStoppedException]) { return }
+    if ($ex.Message -match 'pipeline has been stopped') { return }
+    if (Get-Command Write-ErrorLog -ErrorAction SilentlyContinue) {
+        Write-ErrorLog -Message $ex.Message -Title 'UI thread error'
+        if ($ex.StackTrace) { Write-Log $ex.StackTrace $ColorFgDim }
+    }
 }
 [System.Windows.Forms.Application]::add_ThreadException($script:UiThreadExceptionHandler)
 
@@ -2661,7 +2666,7 @@ function New-ThemedPanel {
 
 # ---------- Main content (no scroll — tall window shows everything) ----------
 $script:FooterHeight = 48
-$script:LogPanelHeight = 200
+$script:LogPanelHeight = 228
 $script:MainContentHeight = 720
 
 $contentFrame = New-Object System.Windows.Forms.Panel
@@ -2731,9 +2736,12 @@ function Update-MainLayout {
         $logCard.Size = New-Object System.Drawing.Size $contentW, $logH
     }
     if ($null -ne $script:glassLog -and $logCard) {
-        $script:glassLog.Location = New-Object System.Drawing.Point(10, 26)
-        $script:glassLog.Size = New-Object System.Drawing.Size([Math]::Max(100, $logCard.Width - 20), [Math]::Max(80, $logCard.Height - 32))
+        $script:glassLog.Location = New-Object System.Drawing.Point(10, 52)
+        $script:glassLog.Size = New-Object System.Drawing.Size([Math]::Max(100, $logCard.Width - 20), [Math]::Max(80, $logCard.Height - 58))
         $script:glassLog.Invalidate()
+    }
+    if ($script:logToolbar -and $logCard) {
+        $script:logToolbar.Width = [Math]::Max(200, $logCard.Width - 20)
     }
     if ($modeCard) { $modeCard.Width = $contentW }
     if ($folderCard) { $folderCard.Width = $contentW }
@@ -3192,12 +3200,66 @@ if (-not $script:GlassLogReady) {
     [System.Windows.Forms.MessageBox]::Show($glassMsg, 'Mod Merger', 'OK', 'Warning') | Out-Null
     exit 1
 }
+$script:logToolbar = New-Object System.Windows.Forms.Panel
+$script:logToolbar.Location = New-Object System.Drawing.Point(10, 26)
+$script:logToolbar.Size = New-Object System.Drawing.Size(400, 24)
+$script:logToolbar.Anchor = 'Top,Left,Right'
+$script:logToolbar.BackColor = $ColorPanelChild
+$logCard.Controls.Add($script:logToolbar)
+
+$loadLogsBtn = New-Object System.Windows.Forms.Button
+$loadLogsBtn.Text = 'Merge logs'
+$loadLogsBtn.Size = New-Object System.Drawing.Size(88, 22)
+$loadLogsBtn.Location = New-Object System.Drawing.Point(0, 1)
+$loadLogsBtn.FlatStyle = 'Flat'
+Set-ThemedButton -Button $loadLogsBtn -Back $ColorBgAlt -Border $ColorBorder -Fore $ColorFg
+$loadLogsBtn.Font = $FontHint
+$script:logToolbar.Controls.Add($loadLogsBtn)
+
+$reloadLogsBtn = New-Object System.Windows.Forms.Button
+$reloadLogsBtn.Text = 'Reload all'
+$reloadLogsBtn.Size = New-Object System.Drawing.Size(78, 22)
+$reloadLogsBtn.Location = New-Object System.Drawing.Point(92, 1)
+$reloadLogsBtn.FlatStyle = 'Flat'
+Set-ThemedButton -Button $reloadLogsBtn -Back $ColorBgAlt -Border $ColorBorder -Fore $ColorFg
+$reloadLogsBtn.Font = $FontHint
+$script:logToolbar.Controls.Add($reloadLogsBtn)
+
+$openLogDirBtn = New-Object System.Windows.Forms.Button
+$openLogDirBtn.Text = 'Open log folder'
+$openLogDirBtn.Size = New-Object System.Drawing.Size(108, 22)
+$openLogDirBtn.Location = New-Object System.Drawing.Point(174, 1)
+$openLogDirBtn.Anchor = 'Top,Right'
+$openLogDirBtn.FlatStyle = 'Flat'
+Set-ThemedButton -Button $openLogDirBtn -Back $ColorBgAlt -Border $ColorBorder -Fore $ColorFg
+$openLogDirBtn.Font = $FontHint
+$script:logToolbar.Controls.Add($openLogDirBtn)
+
 $script:glassLog = New-Object GlassLogView
-$script:glassLog.Location = New-Object System.Drawing.Point(10, 26)
+$script:glassLog.Location = New-Object System.Drawing.Point(10, 52)
 $script:glassLog.Size = New-Object System.Drawing.Size(400, 160)
 $script:glassLog.Anchor = 'Top,Bottom,Left,Right'
 $logCard.Controls.Add($script:glassLog)
 $logBox = $script:glassLog
+
+$loadLogsBtn.Add_Click({
+    Import-SessionLogFilesToView -Append -ReportMissing
+    Write-Log '--- Merged log files into view ---' $ColorAccent
+    Set-Status 'Log files merged into log panel.' $ColorOk
+})
+
+$reloadLogsBtn.Add_Click({
+    Import-SessionLogFilesToView -ReportMissing
+    Write-Log '--- Live session ---' $ColorAccent
+    Set-Status 'Log reloaded from disk.' $ColorOk
+})
+
+$openLogDirBtn.Add_Click({
+    $app = Get-ModMergerAppFolder
+    if (Open-FolderInExplorer -Path $app) {
+        Set-Status "Opened log folder: $app" $ColorFgDim
+    }
+})
 
 $form.Add_Load({
     if ($script:glassLog) { $script:glassLog.Invalidate() }
@@ -3214,7 +3276,10 @@ $form.Add_Load({
         $tphd = Join-Path $app 'tphd'
         if (Test-Path -LiteralPath $tphd -PathType Container) { $srcBox.Text = $tphd }
     }
-    Write-Log ("Build $($script:GuiBuildTag) — folders auto-filled from app folder when present.") $ColorFgDim
+    Import-SessionLogFilesToView -Append -ReportMissing
+    Write-Log '--- Live session ---' $ColorAccent
+    Write-Log ("Build $($script:GuiBuildTag) — errors in red, warnings in yellow, OK in green.") $ColorFgDim
+    Write-Log ("Log files on disk: _err.txt, merge-run.log, mod-merger.log") $ColorFgDim
 })
 $form.Add_Resize({ if ($script:glassLog) { $script:glassLog.Invalidate() } })
 $logCard.Add_Resize({ if ($script:glassLog) { $script:glassLog.Invalidate() } })
@@ -3305,19 +3370,118 @@ $aboutBtn.Add_Click({ Show-AboutTool })
 # Logging helpers
 # ---------------------------------------------------------------------------
 
-function Write-RunLogFile {
-    param([string]$Message)
+function Get-MasterLogPath {
+    Join-Path (Get-ModMergerAppFolder) 'mod-merger.log'
+}
+
+function Write-LogToFile {
+    param(
+        [string]$Message,
+        [string]$FileName = 'mod-merger.log'
+    )
     try {
-        $path = Join-Path (Get-ModMergerAppFolder) 'merge-run.log'
+        $path = Join-Path (Get-ModMergerAppFolder) $FileName
         $line = '[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
         Add-Content -LiteralPath $path -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
     } catch { }
 }
 
+function Get-LogLineColor {
+    param([string]$Message)
+    if ([string]::IsNullOrWhiteSpace($Message)) { return $ColorFgDim }
+    $u = $Message.ToUpperInvariant()
+    if ($Message -match '^\s*(ERR|ERROR|FEIL)\b' -or $u -match '\b(FAILED|EXCEPTION|CANNOT START|STARTUP ERROR)\b') { return $ColorErr }
+    if ($u -match '\b(WARN|WARNING|DRY RUN|SKIPPED|STOPPED)\b') { return $ColorWarn }
+    if ($u -match '\b(OK\b|SUCCEEDED|FINISHED|PIPELINE FINISHED)' -or $Message -match '^OK\s') { return $ColorOk }
+    if ($Message -match '^---' -or $Message -match '^===') { return $ColorAccent }
+    if ($Message -match '^\(missing\)') { return $ColorFgDim }
+    return $ColorFg
+}
+
+function Write-ErrorLog {
+    param(
+        [string]$Message,
+        [string]$Title = 'Error'
+    )
+    $full = if ($Title) { "$Title`: $Message" } else { $Message }
+    try {
+        $errPath = Join-Path (Get-ModMergerAppFolder) '_err.txt'
+        $block = @(
+            "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Title",
+            $Message,
+            ''
+        ) -join [Environment]::NewLine
+        Add-Content -LiteralPath $errPath -Value $block -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch { }
+    Write-Log $full $ColorErr
+}
+
+function Import-SessionLogFilesToView {
+    param(
+        [switch]$Append,
+        [switch]$ReportMissing,
+        [int]$MaxLinesPerFile = 600
+    )
+    if (-not $script:glassLog) { return }
+    if (-not $Append) { $script:glassLog.ClearLines() }
+    $app = Get-ModMergerAppFolder
+    $names = @('_err.txt', 'merge-run.log', 'mod-merger.log')
+    $any = $false
+    $script:SuppressLogFileWrite = $true
+    try {
+        foreach ($name in $names) {
+            $path = Join-Path $app $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                if ($ReportMissing) {
+                    $script:glassLog.AppendLine("(missing) $name", $ColorFgDim)
+                }
+                continue
+            }
+            $any = $true
+            $script:glassLog.AppendLine("--- $name ---", $ColorAccent)
+            $lines = @(Get-Content -LiteralPath $path -Encoding UTF8 -ErrorAction SilentlyContinue)
+            if ($lines.Count -gt $MaxLinesPerFile) {
+                $script:glassLog.AppendLine("(last $MaxLinesPerFile of $($lines.Count) lines)", $ColorFgDim)
+                $lines = $lines[($lines.Count - $MaxLinesPerFile)..($lines.Count - 1)]
+            }
+            foreach ($line in $lines) {
+                if ($null -eq $line) { continue }
+                $script:glassLog.AppendLine($line, (Get-LogLineColor $line))
+            }
+            $script:glassLog.AppendLine('', $ColorFgDim)
+        }
+        if (-not $any -and $ReportMissing) {
+            $script:glassLog.AppendLine('No log .txt files in app folder yet.', $ColorWarn)
+        }
+    }
+    finally {
+        $script:SuppressLogFileWrite = $false
+        $script:glassLog.Invalidate()
+    }
+}
+
+function Write-RunLogFile {
+    param(
+        [string]$Message,
+        [switch]$FileOnly
+    )
+    Write-LogToFile -Message $Message -FileName 'merge-run.log'
+    if (-not $FileOnly) {
+        Write-Log $Message (Get-LogLineColor $Message)
+    }
+}
+
 function Write-Log {
-    param([string]$Message, [System.Drawing.Color]$Color = $ColorFg)
+    param(
+        [string]$Message,
+        [System.Drawing.Color]$Color = $null
+    )
+    if ($null -eq $Color) { $Color = (Get-LogLineColor $Message) }
     if ($script:glassLog) {
         $script:glassLog.AppendLine($Message, $Color)
+    }
+    if (-not $script:SuppressLogFileWrite) {
+        Write-LogToFile -Message $Message -FileName 'mod-merger.log'
     }
     [System.Windows.Forms.Application]::DoEvents()
 }
@@ -3692,7 +3856,11 @@ $convertPngBtn.Add_Click({
     }
 })
 
-$clearBtn.Add_Click({ if ($script:glassLog) { $script:glassLog.ClearLines() }; Set-Status 'Ready.' $ColorFg })
+$clearBtn.Add_Click({
+    if ($script:glassLog) { $script:glassLog.ClearLines() }
+    Write-Log 'Log view cleared (files on disk unchanged — use Merge logs to reload).' $ColorFgDim
+    Set-Status 'Log view cleared.' $ColorFg
+})
 
 $gbLinksBrowse.Add_Click({
     $ofd = New-Object System.Windows.Forms.OpenFileDialog
@@ -4044,10 +4212,13 @@ function Invoke-Plan {
 
 function Show-InputWarning {
     param([string]$Msg, [string]$Title, [string]$Icon = 'Warning')
-    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-        $color = if ($Icon -eq 'Error') { $ColorErr } else { $ColorWarn }
-        Write-Log ("Cannot start: $Msg") $color
+    if ($Icon -eq 'Error') {
+        Write-ErrorLog -Message $Msg -Title $Title
+    } else {
+        Write-Log "$Title`: $Msg" $ColorWarn
+        Write-LogToFile "$Title`: $Msg" 'mod-merger.log'
     }
+    try { $form.Activate() } catch {}
     [System.Windows.Forms.MessageBox]::Show($form, $Msg, $Title, 'OK', $Icon) | Out-Null
 }
 
@@ -4447,7 +4618,7 @@ $runBtn.Add_Click({
         $runFeedbackLbl.Text = if ($dryRunBox.Checked) { 'Running dry run...' } else { 'Merging — see progress bar and log...' }
         $runFeedbackLbl.ForeColor = $ColorAccent
         Set-Status 'Merge running...' $ColorAccent2
-        Write-RunLogFile "Starting pipeline DryRun=$($dryRunBox.Checked) IncludeGB=$includeGb"
+        Write-RunLogFile "Starting pipeline DryRun=$($dryRunBox.Checked) IncludeGB=$includeGb" -FileOnly
         Invoke-FullMergePipeline -Mode $mode -SourceFolder $src -BasePack $base -OutputFolder $out `
             -DryRun $dryRunBox.Checked -IncludeGameBanana $includeGb -SkipConfirm $skipConfirms
         Write-RunLogFile 'Pipeline finished OK'
@@ -4460,12 +4631,13 @@ $runBtn.Add_Click({
         }
     }
     catch {
-        Write-RunLogFile "ERROR: $($_.Exception.Message)"
-        Write-Log ("ERROR: $($_.Exception.Message)") $ColorErr
+        Write-ErrorLog -Message $_.Exception.Message -Title 'Run Full Merge failed'
         if ($_.ScriptStackTrace) { Write-Log $_.ScriptStackTrace $ColorFgDim }
+        Write-RunLogFile "ERROR: $($_.Exception.Message)" -FileOnly
         $runFeedbackLbl.Text = "Error: $($_.Exception.Message)"
         $runFeedbackLbl.ForeColor = $ColorErr
         Set-Status 'Error - see log.' $ColorErr
+        try { $form.Activate() } catch {}
         [void][System.Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Run Full Merge failed',
             [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
@@ -4483,7 +4655,7 @@ Write-Log 'Run Full Merge: GameBanana download -> PNG to DDS -> merge folders ->
 Write-Log 'Scan/Preview: plan only. PNG to DDS row: convert any folder manually with texconv.' $ColorFg
 Write-Log 'GameBanana button: download+merge mods alone (no folder merge).' $ColorFg
 Write-Log 'Drag the title strip to move. Dry run OFF = real merge. GameBanana is optional (checkbox in Step 3).' $ColorFg
-Write-Log ("Diagnostic log file: $(Join-Path (Get-ModMergerAppFolder) 'merge-run.log')") $ColorFgDim
+Write-Log 'Log panel: Merge logs / Reload all — reads _err.txt, merge-run.log, mod-merger.log (errors in red).' $ColorFgDim
 
 try {
     [Console]::TreatControlCAsInput = $false
