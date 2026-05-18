@@ -22,7 +22,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18za'
+$script:GuiBuildTag = '2026-05-18zb'
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
 $script:IsoInstallDlg = $null
@@ -2545,6 +2545,31 @@ function Set-ThemedChildSurface {
     }
 }
 
+function Set-ThemedButton {
+    param(
+        [System.Windows.Forms.Button]$Button,
+        [System.Drawing.Color]$Back,
+        [System.Drawing.Color]$Border,
+        [System.Drawing.Color]$Fore,
+        [System.Drawing.Color]$HoverBack = $null
+    )
+    if (-not $HoverBack) {
+        $HoverBack = [System.Drawing.Color]::FromArgb(
+            [Math]::Min(255, $Back.R + 18),
+            [Math]::Min(255, $Back.G + 14),
+            [Math]::Min(255, $Back.B + 10))
+    }
+    $Button.FlatStyle = 'Flat'
+    $Button.UseVisualStyleBackColor = $false
+    $Button.BackColor = $Back
+    $Button.ForeColor = $Fore
+    $Button.Font = $FontBold
+    $Button.FlatAppearance.BorderSize = 1
+    $Button.FlatAppearance.BorderColor = $Border
+    $Button.FlatAppearance.MouseOverBackColor = $HoverBack
+    $Button.FlatAppearance.MouseDownBackColor = $HoverBack
+}
+
 function New-LogGlassCard {
     param([string]$Title)
     $p = New-Object System.Windows.Forms.Panel
@@ -2713,7 +2738,12 @@ function Update-MainLayout {
     }
     if ($modeCard) { $modeCard.Width = $contentW }
     if ($folderCard) { $folderCard.Width = $contentW }
-    if ($actionsCard) { $actionsCard.Width = $contentW }
+    if ($actionsCard) {
+        $actionsCard.Width = $contentW
+        if ($script:actionsBtnRow) {
+            $script:actionsBtnRow.Width = [Math]::Max(200, $contentW - 20)
+        }
+    }
     if ($gbCard) { $gbCard.Width = $contentW }
     if ($pngCard) { $pngCard.Width = $contentW }
     Update-FooterLayout -Cw $cw -Ch $ch
@@ -2890,13 +2920,21 @@ $folderCard.Controls.Add($outHint)
 Set-ThemedChildSurface $outHint
 
 # ---------- Merge actions (Step 3) — directly under folder picker so buttons stay visible ----------
-$script:ActionsCardHeight = 132
+$script:ActionsCardHeight = 150
 $actionsCardY = $contentTop + 122 + 228 + 12
 $actionsCard = New-ThemedPanel -Title 'Step 3  -  Run merge (download, convert, add to pack)'
 $actionsCard.Location = New-Object System.Drawing.Point(20, $actionsCardY)
 $actionsCard.Size = New-Object System.Drawing.Size(($form.ClientSize.Width - 40), $script:ActionsCardHeight)
 $actionsCard.Anchor = 'Top,Left,Right'
 $mainPanel.Controls.Add($actionsCard)
+
+# Opaque strip for buttons — stops semi-transparent panel from bleeding through Flat buttons.
+$script:actionsBtnRow = New-Object System.Windows.Forms.Panel
+$script:actionsBtnRow.Location = New-Object System.Drawing.Point(10, 86)
+$script:actionsBtnRow.Size = New-Object System.Drawing.Size(($actionsCard.Width - 20), 40)
+$script:actionsBtnRow.Anchor = 'Top,Left,Right'
+$script:actionsBtnRow.BackColor = $ColorPanelChild
+$actionsCard.Controls.Add($script:actionsBtnRow)
 
 $dryRunBox = New-Object System.Windows.Forms.CheckBox
 $dryRunBox.Text = 'Dry run only  -  preview in log, NO files copied (leave OFF to merge for real)'
@@ -2939,51 +2977,39 @@ Set-ThemedChildSurface $includeGbMergeBox
 
 $scanBtn = New-Object System.Windows.Forms.Button
 $scanBtn.Text = 'Scan / Preview'
-$scanBtn.Location = New-Object System.Drawing.Point(430, 92)
-$scanBtn.Size = New-Object System.Drawing.Size(130, 36)
+$scanBtn.Size = New-Object System.Drawing.Size(130, 34)
 $scanBtn.Anchor = 'Top,Right'
-$scanBtn.FlatStyle = 'Flat'
-$scanBtn.BackColor = $ColorBgAlt
-$scanBtn.ForeColor = $ColorFg
-$scanBtn.FlatAppearance.BorderColor = $ColorAccent2
-$scanBtn.FlatAppearance.MouseOverBackColor = $ColorBorder
-$scanBtn.Font = $FontBold
-$actionsCard.Controls.Add($scanBtn)
+$scanBtn.Location = New-Object System.Drawing.Point(($script:actionsBtnRow.Width - 406), 3)
+Set-ThemedButton -Button $scanBtn -Back $ColorBgAlt -Border $ColorBorder -Fore $ColorFg
+$script:actionsBtnRow.Controls.Add($scanBtn)
 
 $runBtn = New-Object System.Windows.Forms.Button
 $runBtn.Text = 'Run Full Merge'
-$runBtn.Location = New-Object System.Drawing.Point(568, 92)
-$runBtn.Size = New-Object System.Drawing.Size(140, 36)
+$runBtn.Size = New-Object System.Drawing.Size(140, 34)
 $runBtn.Anchor = 'Top,Right'
-$runBtn.FlatStyle = 'Flat'
-$runBtn.BackColor = $ColorAccent
-$runBtn.ForeColor = [System.Drawing.Color]::FromArgb(20,14,8)
-$runBtn.FlatAppearance.BorderColor = $ColorAccentHover
-$runBtn.FlatAppearance.MouseOverBackColor = $ColorAccentHover
-$runBtn.Font = $FontBold
-$actionsCard.Controls.Add($runBtn)
+$runBtn.Location = New-Object System.Drawing.Point(($script:actionsBtnRow.Width - 268), 3)
+Set-ThemedButton -Button $runBtn -Back $ColorAccent -Border $ColorAccentHover -Fore ([System.Drawing.Color]::FromArgb(20, 14, 8)) -HoverBack $ColorAccentHover
+$script:actionsBtnRow.Controls.Add($runBtn)
 
 $clearBtn = New-Object System.Windows.Forms.Button
 $clearBtn.Text = 'Clear Log'
-$clearBtn.Location = New-Object System.Drawing.Point(716, 92)
-$clearBtn.Size = New-Object System.Drawing.Size(120, 36)
+$clearBtn.Size = New-Object System.Drawing.Size(120, 34)
 $clearBtn.Anchor = 'Top,Right'
-$clearBtn.FlatStyle = 'Flat'
-$clearBtn.BackColor = $ColorBgAlt
-$clearBtn.ForeColor = $ColorFg
-$clearBtn.FlatAppearance.BorderColor = $ColorBorder
-$clearBtn.FlatAppearance.MouseOverBackColor = $ColorBorder
-$actionsCard.Controls.Add($clearBtn)
+$clearBtn.Location = New-Object System.Drawing.Point(($script:actionsBtnRow.Width - 124), 3)
+Set-ThemedButton -Button $clearBtn -Back $ColorBgAlt -Border $ColorBorder -Fore $ColorFg
+$script:actionsBtnRow.Controls.Add($clearBtn)
 
-# Status for merge — bottom of card, never overlaps buttons
+# Status for merge — below button strip
 $runFeedbackLbl = New-Object System.Windows.Forms.Label
 $runFeedbackLbl.Text = 'Ready — fill folders above, then Run Full Merge.'
-$runFeedbackLbl.Location = New-Object System.Drawing.Point(12, 108)
-$runFeedbackLbl.Size = New-Object System.Drawing.Size(400, 18)
+$runFeedbackLbl.Location = New-Object System.Drawing.Point(12, 130)
+$runFeedbackLbl.Size = New-Object System.Drawing.Size(820, 18)
 $runFeedbackLbl.ForeColor = $ColorFgDim
 $runFeedbackLbl.Font = $FontHint
 $actionsCard.Controls.Add($runFeedbackLbl)
 Set-ThemedChildSurface $runFeedbackLbl
+$script:actionsBtnRow.BringToFront()
+foreach ($b in @($scanBtn, $runBtn, $clearBtn)) { $b.BringToFront() }
 
 # ---------- GameBanana downloader (Step 4 - optional) ----------
 $script:GbCardHeight = 118
