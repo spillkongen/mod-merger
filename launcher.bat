@@ -1,7 +1,17 @@
 @echo off
-REM Mod Merger — always start the app with this file (double-click launcher.bat).
+REM Mod Merger - the only .bat launcher (double-click launcher.bat).
+REM Re-launches with administrator rights (UAC) so Windows is less likely to block file ops.
+
+net session >nul 2>&1
+if not %ERRORLEVEL%==0 (
+    echo Requesting administrator rights for Mod Merger...
+    echo Approve the UAC prompt if Windows asks.
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','\"\"%~f0\"\"' -Verb RunAs -WorkingDirectory '%~dp0.'"
+    exit /b 0
+)
+
 cd /d "%~dp0"
-title Mod Merger
+title Mod Merger (Administrator)
 
 if not exist "%~dp0Texturepack-Merge-Launcher.ps1" (
     echo ERROR: Texturepack-Merge-Launcher.ps1 not found in:
@@ -30,8 +40,10 @@ if exist "%~dp0BUILD-VERSION.txt" (
     echo.
     type "%~dp0BUILD-VERSION.txt"
     echo.
+    echo Running as Administrator.
+    echo.
 ) else (
-    echo Starting Mod Merger...
+    echo Starting Mod Merger as Administrator...
 )
 
 "%PS_EXE%" -NoProfile -STA -ExecutionPolicy Bypass -File "%~dp0Texturepack-Merge-Launcher.ps1"

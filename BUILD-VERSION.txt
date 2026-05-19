@@ -1,13 +1,18 @@
-MOD MERGER — BUILD INFO
-Updated: 18.05.2026 23:15:00
-Build tag: 2026-05-18zf
+﻿MOD MERGER - BUILD INFO
+Updated: 19.05.2026
+Build tag: 2026-05-19zg
 
-START THE APP WITH:
-  launcher.bat   (recommended — double-click this)
+START THE APP:
+  launcher.bat   (only .bat launcher - double-click this)
+                 Requests Administrator (UAC) automatically.
 
-Other launchers:
-  Launch.bat     (same as launcher.bat)
-  Start Mod Merger.vbs  (no console window)
+Optional (no console, not admin):
+  Start Mod Merger.vbs
 
 Main script: Texturepack-Merge-GUI.ps1
-Folder: C:\Users\marti\Desktop\Mod Merger
+
+Shield / style picker (app-wide):
+  When a mod has 2+ variant folders, a picture dialog opens.
+  Thumbnails use preview PNGs (filename does NOT start with tex).
+  Only tex*.png files are converted to DDS.
+  Uncheck "skip style picture picker" on the PNG tab to convert all subfolders at once.

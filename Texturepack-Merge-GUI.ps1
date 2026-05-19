@@ -10,9 +10,9 @@ Two merge modes (both require two folders):
     source tree, overwrite the destination file with the source file.
 
   Append missing files
-    Copy every source file whose name does NOT exist anywhere in the
-    destination tree. Files keep the same folder layout as the source pack
-    (e.g. tphd\CREATURE\tex1_foo.dds -> henriko\GZ2\CREATURE\tex1_foo.dds).
+    Copy every source .dds whose relative path is missing in the destination.
+    Each subfolder gets an -Imported suffix (e.g. tphd\GZ2\CREATURE\tex1.dds ->
+    base\GZ2\CREATURE-Imported\tex1.dds). Henriko folders are never overwritten.
 
 A few specific filenames are excluded by default (loading-screen / boot-screen
 textures that should normally never be swapped).
@@ -21,7 +21,7 @@ textures that should normally never be swapped).
 # StrictMode Latest breaks WinForms click handlers; 3.0 keeps safety without killing events.
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
-$script:GuiBuildTag = '2026-05-18zf'
+$script:GuiBuildTag = '2026-05-18zv'
 $script:SuppressLogFileWrite = $false
 $script:UiHandlers = [System.Collections.ArrayList]::new()
 $script:glassLog = $null
@@ -43,7 +43,13 @@ function Wrap-SafeUiEvent {
     $capturedIndex = $handlerIndex
     return {
         param($s, $e)
-        $handler = $script:UiHandlers[$capturedIndex]
+        if ($null -eq $script:UiHandlers) {
+            $script:UiHandlers = [System.Collections.ArrayList]::new()
+        }
+        $handler = $null
+        if ($capturedIndex -ge 0 -and $capturedIndex -lt $script:UiHandlers.Count) {
+            $handler = $script:UiHandlers[$capturedIndex]
+        }
         if ($null -eq $handler) { }
         else {
             try {
@@ -201,6 +207,28 @@ $ColorWarn        = [System.Drawing.Color]::FromArgb(255, 220, 100)
 $ColorErr         = [System.Drawing.Color]::FromArgb(255, 130, 115)
 $ColorCloseHover  = [System.Drawing.Color]::FromArgb(190, 55, 55)
 
+# Script scope so nested handlers (Download & merge logFn) always resolve colors.
+$script:ColorFg = $ColorFg
+$script:ColorFgDim = $ColorFgDim
+$script:ColorAccent = $ColorAccent
+$script:ColorAccent2 = $ColorAccent2
+$script:ColorOk = $ColorOk
+$script:ColorWarn = $ColorWarn
+$script:ColorErr = $ColorErr
+
+function Get-LogColorByKind {
+    param([string]$Kind = '')
+    switch ($Kind) {
+        'err'    { return $script:ColorErr }
+        'warn'   { return $script:ColorWarn }
+        'ok'     { return $script:ColorOk }
+        'accent' { return $script:ColorAccent }
+        'dim'    { return $script:ColorFgDim }
+        'fg'     { return $script:ColorFg }
+        default  { return $script:ColorFg }
+    }
+}
+
 $FontMain    = New-Object System.Drawing.Font('Segoe UI', 10.5, [System.Drawing.FontStyle]::Bold)
 $FontBold    = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
 $FontHint    = New-Object System.Drawing.Font('Segoe UI', 9.5, [System.Drawing.FontStyle]::Bold)
@@ -292,37 +320,107 @@ function Get-StylePreviewPngs {
       Where-Object { Test-IsPreviewPngName $_.Name })
 }
 
+function Get-StyleThumbnailPath {
+    param([string]$Folder)
+    $previews = @(Get-StylePreviewPngs -Folder $Folder)
+    if ($previews.Count -gt 0) {
+        return ($previews | Sort-Object Name | Select-Object -First 1).FullName
+    }
+    $tex = @(Get-ChildItem -LiteralPath $Folder -Filter 'tex*.png' -File -Recurse -ErrorAction SilentlyContinue |
+        Select-Object -First 1)
+    if ($tex) { return $tex.FullName }
+    return $null
+}
+
+function Test-IsLikelyStyleSubfolder {
+    param([string]$FolderPath)
+    if (-not (Test-Path -LiteralPath $FolderPath -PathType Container)) { return $false }
+    $leaf = (Split-Path -Path $FolderPath -Leaf).ToUpperInvariant()
+    $skip = @('GZ2', '_EXTRACT', 'CREATURE', 'MENU', 'MAP', 'NPC', 'OBJECT', 'ROOM', 'ST', 'RVL', 'WARP')
+    if ($skip -contains $leaf) { return $false }
+    if (Test-IsGz2TexturePackRoot -Folder $FolderPath) { return $false }
+    return $null -ne (Get-StyleThumbnailPath -Folder $FolderPath)
+}
+
+function Add-ModStyleChoiceIfNew {
+    param(
+        $ChoiceList,
+        [string]$FolderPath,
+        [hashtable]$SeenPaths
+    )
+    $key = $FolderPath.ToLowerInvariant()
+    if ($SeenPaths.ContainsKey($key)) { return }
+    $thumb = Get-StyleThumbnailPath -Folder $FolderPath
+    if (-not $thumb) { return }
+    $previews = @(Get-StylePreviewPngs -Folder $FolderPath)
+    [void]$ChoiceList.Add([pscustomobject]@{
+        StyleName    = Split-Path -Path $FolderPath -Leaf
+        FolderPath   = $FolderPath
+        PreviewPath  = $thumb
+        PreviewCount = $previews.Count
+        UsesTexThumb = ($previews.Count -eq 0)
+    })
+    $SeenPaths[$key] = $true
+}
+
 function Get-ModStyleChoices {
     param([string]$RootFolder)
+    if (-not (Test-Path -LiteralPath $RootFolder -PathType Container)) { return @() }
     $root = (Resolve-Path -LiteralPath $RootFolder).Path
     $choices = New-Object System.Collections.Generic.List[object]
-    $childDirs = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)
-    if ($childDirs.Count -gt 0) {
-        foreach ($dir in $childDirs) {
-            $previews = @(Get-StylePreviewPngs -Folder $dir.FullName)
-            if ($previews.Count -eq 0) { continue }
-            $preview = $previews | Sort-Object Name | Select-Object -First 1
-            [void]$choices.Add([pscustomobject]@{
-                StyleName    = $dir.Name
-                FolderPath   = $dir.FullName
-                PreviewPath  = $preview.FullName
-                PreviewCount = $previews.Count
-            })
+    $seen = @{}
+
+    foreach ($dir in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)) {
+        if (Test-IsLikelyStyleSubfolder -FolderPath $dir.FullName) {
+            Add-ModStyleChoiceIfNew -ChoiceList $choices -FolderPath $dir.FullName -SeenPaths $seen
+        }
+        foreach ($sub in @(Get-ChildItem -LiteralPath $dir.FullName -Directory -ErrorAction SilentlyContinue)) {
+            if (Test-IsLikelyStyleSubfolder -FolderPath $sub.FullName) {
+                Add-ModStyleChoiceIfNew -ChoiceList $choices -FolderPath $sub.FullName -SeenPaths $seen
+            }
         }
     }
-    if ($choices.Count -eq 0) {
-        $previews = @(Get-StylePreviewPngs -Folder $root)
-        if ($previews.Count -gt 0) {
-            $preview = $previews | Sort-Object Name | Select-Object -First 1
-            [void]$choices.Add([pscustomobject]@{
-                StyleName    = Split-Path $root -Leaf
-                FolderPath   = $root
-                PreviewPath  = $preview.FullName
-                PreviewCount = $previews.Count
-            })
-        }
+
+    if ($choices.Count -eq 0 -and (Test-IsLikelyStyleSubfolder -FolderPath $root)) {
+        Add-ModStyleChoiceIfNew -ChoiceList $choices -FolderPath $root -SeenPaths $seen
     }
     return @($choices.ToArray())
+}
+
+function Request-ModStyleFolderSelection {
+    param(
+        [string]$ContentRoot,
+        [scriptblock]$LogFn,
+        [bool]$PromptForStyle = $true,
+        [string[]]$Preselected = @()
+    )
+    if ($Preselected -and $Preselected.Count -gt 0) {
+        return @($Preselected | Where-Object { $_ })
+    }
+    $styles = @(Get-ModStyleChoices -RootFolder $ContentRoot)
+    if ($styles.Count -ge 2 -and $PromptForStyle) {
+        if ($form) {
+            try { $form.Activate(); $form.BringToFront() } catch { }
+        }
+        if ($LogFn) {
+            & $LogFn ("Found $($styles.Count) style option(s) — pick which shield/variant to use.") 'accent'
+            & $LogFn 'Preview pictures = PNG files that do NOT start with tex. Only tex*.png files are converted to DDS.' 'dim'
+        }
+        $picked = @(Show-ModStylePickerDialog -Styles $styles)
+        if ($picked.Count -eq 0) {
+            if ($LogFn) { & $LogFn 'Style picker cancelled — nothing converted.' 'warn' }
+            return @()
+        }
+        foreach ($p in $picked) {
+            if ($LogFn) { & $LogFn ("  Selected: $($p.StyleName)") 'ok' }
+        }
+        return @($picked | ForEach-Object { $_.FolderPath })
+    }
+    if ($styles.Count -eq 1) {
+        if ($LogFn) { & $LogFn ("Single style: $($styles[0].StyleName)") 'dim' }
+        return @($styles[0].FolderPath)
+    }
+    return @($ContentRoot)
 }
 
 function New-StylePreviewThumbnail {
@@ -347,7 +445,7 @@ function Show-ModStylePickerDialog {
     if (-not $Styles -or $Styles.Count -eq 0) { return @() }
 
     $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = 'Choose texture style(s) to convert'
+    $dlg.Text = 'Choose shield / style (preview pictures)'
     $dlg.Size = New-Object System.Drawing.Size(760, 560)
     $dlg.MinimumSize = New-Object System.Drawing.Size(640, 480)
     $dlg.StartPosition = 'CenterParent'
@@ -359,7 +457,7 @@ function Show-ModStylePickerDialog {
     $dlg.MinimizeBox = $false
 
     $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text = 'Each folder is a style (e.g. a shield variant). Check the ones to convert. Preview PNGs = any .png that does NOT start with tex (mod files start with tex).'
+    $lbl.Text = 'Pick which shield / style to use. Thumbnail = preview PNG (name does NOT start with tex). Only tex*.png files in checked folders become DDS.'
     $lbl.Location = New-Object System.Drawing.Point(16, 12)
     $lbl.Size = New-Object System.Drawing.Size(720, 40)
     $lbl.ForeColor = $ColorFg
@@ -389,6 +487,10 @@ function Show-ModStylePickerDialog {
         $item.Checked = $true
     }
     $lv.LargeImageList = $imgList
+    $lv.Add_DoubleClick({
+        foreach ($i in $lv.Items) { $i.Checked = $false }
+        if ($lv.SelectedItems.Count -gt 0) { $lv.SelectedItems[0].Checked = $true }
+    })
     $dlg.Controls.Add($lv)
 
     $selAllBtn = New-Object System.Windows.Forms.Button
@@ -449,8 +551,15 @@ function Show-ModStylePickerDialog {
         $dlg.StartPosition = 'CenterScreen'
     }
     $dlg.TopMost = $true
-    if ($dlg.ShowDialog($form) -ne [System.Windows.Forms.DialogResult]::OK) { return @() }
-    $dlg.TopMost = $false
+    [System.Windows.Forms.Application]::DoEvents()
+    try {
+        if ($form) { $form.Enabled = $false }
+        $dialogResult = $dlg.ShowDialog($form)
+    } finally {
+        $dlg.TopMost = $false
+        try { if ($form) { $form.Enabled = $true; $form.Activate() } } catch { }
+    }
+    if ($dialogResult -ne [System.Windows.Forms.DialogResult]::OK) { return @() }
     $picked = @()
     foreach ($item in $lv.Items) {
         if ($item.Checked) { $picked += $item.Tag }
@@ -526,6 +635,23 @@ function Resolve-ModContentRoot {
         if (@(Get-ModStyleChoices -RootFolder $inner).Count -gt 0) { return $inner }
     }
     return $root
+}
+
+function Get-PerModFoldersUnderGz2 {
+    param([string]$Gz2Root)
+    if (-not (Test-Path -LiteralPath $Gz2Root -PathType Container)) { return @() }
+    $leaf = (Split-Path -Path $Gz2Root -Leaf)
+    if ($leaf -ne 'GZ2') { return @() }
+    if (Test-IsGz2TexturePackRoot -Folder $Gz2Root) { return @() }
+    return @(Get-ChildItem -LiteralPath $Gz2Root -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '^_' })
+}
+
+function Get-StylePickerSkipPreference {
+    try {
+        if ($null -ne $pngNoPickerBox -and $pngNoPickerBox.Checked) { return $true }
+    } catch { }
+    return $false
 }
 
 function Get-ModAppendFileEntries {
@@ -609,7 +735,9 @@ function Open-ExplorerForAppendPlan {
     $destDirs = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($p in $items) {
         $dir = Split-Path -Path $p.Destination -Parent
-        if ($dir) { [void]$destDirs.Add((Resolve-Path -LiteralPath $dir).Path) }
+        if ($dir -and (Test-Path -LiteralPath $dir -PathType Container)) {
+            try { [void]$destDirs.Add((Resolve-Path -LiteralPath $dir).Path) } catch { [void]$destDirs.Add($dir) }
+        }
     }
     $dirs = @($destDirs | Sort-Object)
     if ($dirs.Count -eq 1) {
@@ -622,22 +750,29 @@ function Open-ExplorerForAppendPlan {
 function Get-AppendEntriesForSourceRoot {
     param(
         [string]$Root,
-        [string[]]$SelectedStyleFolders
+        [string[]]$SelectedStyleFolders,
+        [bool]$PromptForStyle = $true
     )
     $contentRoot = Resolve-ModContentRoot -ExtractedFolder $Root
     if (Test-IsGz2TexturePackRoot -Folder $contentRoot) {
         return @(Get-ModAppendFileEntries -ModRoot $contentRoot -LimitToStyleFolders @($contentRoot))
     }
-    $styles = @(Get-ModStyleChoices -RootFolder $contentRoot)
-    if ($styles.Count -ge 2) {
-        $stylePaths = @($SelectedStyleFolders | Where-Object { $_ })
-        if ($stylePaths.Count -eq 0) {
-            $stylePaths = @($styles | ForEach-Object { $_.FolderPath })
-            Write-Log ("Multiple style folders found — using all $($stylePaths.Count) for merge scan.") $ColorFgDim
+    $stylePaths = @($SelectedStyleFolders | Where-Object { $_ })
+    if ($stylePaths.Count -eq 0) {
+        if ($PromptForStyle) {
+            $stylePaths = @(Request-ModStyleFolderSelection -ContentRoot $contentRoot -LogFn $null `
+                -PromptForStyle $true -Preselected @())
+            if ($stylePaths.Count -eq 0) { return @() }
+        } else {
+            $styles = @(Get-ModStyleChoices -RootFolder $contentRoot)
+            if ($styles.Count -ge 2) {
+                $stylePaths = @($styles | ForEach-Object { $_.FolderPath })
+            } else {
+                $stylePaths = @($contentRoot)
+            }
         }
-        return @(Get-ModAppendFileEntries -ModRoot $contentRoot -LimitToStyleFolders $stylePaths)
     }
-    return @(Get-ModAppendFileEntries -ModRoot $contentRoot -LimitToStyleFolders @($contentRoot))
+    return @(Get-ModAppendFileEntries -ModRoot $contentRoot -LimitToStyleFolders $stylePaths)
 }
 
 function Invoke-PngToDdsForFolder {
@@ -647,20 +782,37 @@ function Invoke-PngToDdsForFolder {
         $ProgressBar,
         [bool]$PromptForStyle = $true,
         [bool]$IncludeAllPngs = $false,
-        [bool]$EntireTree = $false
+        [bool]$EntireTree = $false,
+        [bool]$AllowPerModSplit = $true
     )
     $contentRoot = Resolve-ModContentRoot -ExtractedFolder $Folder
-    if (Test-IsGz2TexturePackRoot -Folder $contentRoot) {
-        if ($LogFn) { & $LogFn 'GZ2 texture pack — converting tex*.png in all subfolders (CREATURE, MENU, etc.).' 'dim' }
-        $total = Convert-PngsInFolderToDds -Folder $contentRoot -LogFn $LogFn -ProgressBar $ProgressBar -IncludeAllPngs:$IncludeAllPngs
-        return [pscustomobject]@{
-            Count                = $total
-            SelectedStyleFolders = @($contentRoot)
-            ContentRoot          = $contentRoot
+    $targetFolders = @()
+
+    if ($AllowPerModSplit) {
+        $perModDirs = @(Get-PerModFoldersUnderGz2 -Gz2Root $contentRoot)
+        if ($perModDirs.Count -gt 0) {
+            if ($LogFn) {
+                & $LogFn ("GZ2 has $($perModDirs.Count) mod folder(s) — style picker runs inside each mod.") 'dim'
+            }
+            $grandTotal = 0
+            $allStyles = New-Object System.Collections.Generic.List[string]
+            foreach ($modDir in $perModDirs) {
+                if ($LogFn) { & $LogFn ("=== Mod: $($modDir.Name) ===") 'accent' }
+                $sub = Invoke-PngToDdsForFolder -Folder $modDir.FullName -LogFn $LogFn -ProgressBar $ProgressBar `
+                    -PromptForStyle $PromptForStyle -IncludeAllPngs:$IncludeAllPngs -EntireTree:$EntireTree `
+                    -AllowPerModSplit:$false
+                $grandTotal += [int]$sub.Count
+                foreach ($sf in @($sub.SelectedStyleFolders)) {
+                    if ($sf) { [void]$allStyles.Add($sf) }
+                }
+            }
+            return [pscustomobject]@{
+                Count                = $grandTotal
+                SelectedStyleFolders = @($allStyles.ToArray())
+                ContentRoot          = $contentRoot
+            }
         }
     }
-    $styles = @(Get-ModStyleChoices -RootFolder $contentRoot)
-    $targetFolders = @()
 
     if ($EntireTree) {
         if ($LogFn) {
@@ -674,31 +826,25 @@ function Invoke-PngToDdsForFolder {
         }
     }
 
-        if ($styles.Count -ge 2 -and $PromptForStyle) {
-        if ($form) {
-            try {
-                $form.Activate()
-                $form.BringToFront()
-            } catch { }
+    # Shield / style packs: always offer picker when 2+ variants (before full GZ2 auto-convert).
+    $stylePaths = @(Request-ModStyleFolderSelection -ContentRoot $contentRoot -LogFn $LogFn `
+        -PromptForStyle $PromptForStyle -Preselected @())
+    if ($stylePaths.Count -eq 0) {
+        return [pscustomobject]@{ Count = 0; SelectedStyleFolders = @(); ContentRoot = $contentRoot }
+    }
+    $styles = @(Get-ModStyleChoices -RootFolder $contentRoot)
+    if ($styles.Count -ge 2) {
+        $targetFolders = @($stylePaths)
+    } elseif (Test-IsGz2TexturePackRoot -Folder $contentRoot) {
+        if ($LogFn) { & $LogFn 'GZ2 texture pack — converting tex*.png in all subfolders (CREATURE, MENU, etc.).' 'dim' }
+        $total = Convert-PngsInFolderToDds -Folder $contentRoot -LogFn $LogFn -ProgressBar $ProgressBar -IncludeAllPngs:$IncludeAllPngs
+        return [pscustomobject]@{
+            Count                = $total
+            SelectedStyleFolders = @($contentRoot)
+            ContentRoot          = $contentRoot
         }
-        if ($LogFn) {
-            & $LogFn ("Found $($styles.Count) style folder(s) with preview PNGs.") 'accent'
-            & $LogFn 'Pick which style(s) to use (preview = PNG not starting with tex). Only tex*.png become DDS.' 'dim'
-        }
-        $picked = @(Show-ModStylePickerDialog -Styles $styles)
-        if ($picked.Count -eq 0) {
-            if ($LogFn) { & $LogFn 'No style selected - skipped.' 'warn' }
-            return [pscustomobject]@{ Count = 0; SelectedStyleFolders = @(); ContentRoot = $contentRoot }
-        }
-        $targetFolders = @($picked | ForEach-Object { $_.FolderPath })
-        foreach ($p in $picked) {
-            if ($LogFn) { & $LogFn ("  Style: $($p.StyleName)") 'ok' }
-        }
-    } elseif ($styles.Count -eq 1) {
-        $targetFolders = @($styles[0].FolderPath)
-        if ($LogFn) { & $LogFn ("Style folder: $($styles[0].StyleName)") 'dim' }
     } else {
-        $targetFolders = @($contentRoot)
+        $targetFolders = @($stylePaths)
     }
 
     $total = 0
@@ -845,6 +991,150 @@ function Get-GameBananaDownloadFolder {
     return Get-ModMergerAppFolder
 }
 
+function Get-SanitizedModFolderName {
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return 'mod' }
+    $s = Get-SanitizedFileNameGui -Name $Name.Trim()
+    $s = $s.Trim('.', ' ')
+    if ([string]::IsNullOrWhiteSpace($s)) { return 'mod' }
+    return $s
+}
+
+function Get-ModFolderNameFromArchive {
+    param([string]$ArchivePath)
+    $name = $ArchivePath
+    if ($ArchivePath -match '[\\/]') {
+        $name = [System.IO.Path]::GetFileNameWithoutExtension($ArchivePath)
+    } elseif ($ArchivePath -match '\.[^\\/]+$') {
+        $name = [System.IO.Path]::GetFileNameWithoutExtension($ArchivePath)
+    }
+    if ($name -match '^(.+?)\s+\(\d+\)$') { return $matches[1].Trim() }
+    return $name
+}
+
+function Remove-NumberedDuplicateModFolders {
+    param(
+        [string]$Gz2Root,
+        [scriptblock]$LogFn
+    )
+    if (-not (Test-Path -LiteralPath $Gz2Root -PathType Container)) { return }
+    foreach ($dir in @(Get-ChildItem -LiteralPath $Gz2Root -Directory -ErrorAction SilentlyContinue)) {
+        if ($dir.Name -match ' \(\d+\)$') {
+            try {
+                Remove-Item -LiteralPath $dir.FullName -Recurse -Force
+                if ($LogFn) { & $LogFn ("Removed old duplicate folder: $($dir.Name)") 'dim' }
+            } catch {
+                if ($LogFn) { & $LogFn ("Could not remove $($dir.Name): $($_.Exception.Message)") 'warn' }
+            }
+        }
+    }
+}
+
+function Get-OrCreateModFolderUnderGz2 {
+    param(
+        [Parameter(Mandatory)][string]$Gz2Root,
+        [Parameter(Mandatory)][string]$ModLabel,
+        [scriptblock]$LogFn
+    )
+    $base = Get-SanitizedModFolderName -Name (Get-ModFolderNameFromArchive -ArchivePath $ModLabel)
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = Get-SanitizedModFolderName -Name $ModLabel }
+    $path = Join-Path $Gz2Root $base
+    if (Test-Path -LiteralPath $path) {
+        if ($LogFn) { & $LogFn ("  Replacing existing mod folder: $base") 'dim' }
+        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Path $path -Force | Out-Null
+    return $path
+}
+
+function Get-DownloadMergeOutputParent {
+    param([string]$OutputPath = '')
+    # Parent folder for Download & merge: Step 3 output, or app\output
+    if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+        $raw = $OutputPath.Trim()
+        if (-not (Test-Path -LiteralPath $raw)) {
+            New-Item -ItemType Directory -Path $raw -Force | Out-Null
+        }
+        if (Test-Path -LiteralPath $raw -PathType Container) {
+            return (Resolve-Path -LiteralPath $raw).Path
+        }
+        return $raw
+    }
+    $parent = Join-Path (Get-ModMergerAppFolder) 'output'
+    if (-not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    return (Resolve-Path -LiteralPath $parent).Path
+}
+
+function Ensure-DownloadMergeGz2Root {
+    param([string]$OutputParent)
+    $gz2 = Join-Path $OutputParent 'GZ2'
+    if (-not (Test-Path -LiteralPath $gz2)) {
+        New-Item -ItemType Directory -Path $gz2 -Force | Out-Null
+    }
+    return (Resolve-Path -LiteralPath $gz2).Path
+}
+
+function Get-ModMergerSettingsPath {
+    return Join-Path (Get-ModMergerAppFolder) 'mod-merger-settings.json'
+}
+
+function Export-ModMergerSettings {
+    try {
+        $settings = [ordered]@{
+            LinksFile         = ''
+            BasePack          = ''
+            AddFrom           = ''
+            OutputFolder      = ''
+            IncludeGameBanana = $true
+            DryRun            = $false
+            SkipConfirm       = $true
+            SavedAt           = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        }
+        if ($gbLinksBox) { $settings.LinksFile = [string]$gbLinksBox.Text.Trim() }
+        if ($dstBox) { $settings.BasePack = [string]$dstBox.Text.Trim() }
+        if ($srcBox) { $settings.AddFrom = [string]$srcBox.Text.Trim() }
+        if ($outBox) { $settings.OutputFolder = [string]$outBox.Text.Trim() }
+        try { if ($includeGbMergeBox) { $settings.IncludeGameBanana = [bool]$includeGbMergeBox.Checked } } catch { }
+        try { if ($dryRunBox) { $settings.DryRun = [bool]$dryRunBox.Checked } } catch { }
+        try { if ($skipConfirmBox) { $settings.SkipConfirm = [bool]$skipConfirmBox.Checked } } catch { }
+        $json = $settings | ConvertTo-Json -Depth 4
+        Set-Content -LiteralPath (Get-ModMergerSettingsPath) -Value $json -Encoding UTF8
+    } catch { }
+}
+
+function Import-ModMergerSettings {
+    $path = Get-ModMergerSettingsPath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
+    try {
+        $s = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch { return }
+    if ($gbLinksBox -and $s.PSObject.Properties['LinksFile'] -and -not [string]::IsNullOrWhiteSpace([string]$s.LinksFile)) {
+        $gbLinksBox.Text = [string]$s.LinksFile
+    }
+    if ($dstBox -and $s.PSObject.Properties['BasePack'] -and -not [string]::IsNullOrWhiteSpace([string]$s.BasePack)) {
+        $dstBox.Text = [string]$s.BasePack
+    }
+    if ($srcBox -and $s.PSObject.Properties['AddFrom'] -and -not [string]::IsNullOrWhiteSpace([string]$s.AddFrom)) {
+        $srcBox.Text = [string]$s.AddFrom
+    }
+    if ($outBox -and $s.PSObject.Properties['OutputFolder']) {
+        $outBox.Text = [string]$s.OutputFolder
+    }
+    try {
+        if ($includeGbMergeBox -and $s.PSObject.Properties['IncludeGameBanana']) {
+            $includeGbMergeBox.Checked = [bool]$s.IncludeGameBanana
+        }
+    } catch { }
+    try {
+        if ($dryRunBox -and $s.PSObject.Properties['DryRun']) { $dryRunBox.Checked = [bool]$s.DryRun }
+    } catch { }
+    try {
+        if ($skipConfirmBox -and $s.PSObject.Properties['SkipConfirm']) { $skipConfirmBox.Checked = [bool]$s.SkipConfirm }
+    } catch { }
+}
+
 function Ensure-GameBananaLinksFile {
     param(
         [string]$Root = '',
@@ -852,6 +1142,7 @@ function Ensure-GameBananaLinksFile {
         [scriptblock]$LogFn
     )
     $path = Get-GameBananaLinksFilePath -Root $Root
+    # Never overwrite an existing file — your links stay in gamebanana-mods.txt across restarts.
     if ((Test-Path -LiteralPath $path -PathType Leaf) -and -not $ForceNew) {
         return $path
     }
@@ -881,15 +1172,82 @@ function Ensure-GameBananaLinksFile {
 }
 
 function Get-GameBananaLinksFromFile {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [scriptblock]$LogFn = $null
+    )
     $links = @()
+    $seen = @{}
+    $dupes = 0
     foreach ($line in (Get-Content -LiteralPath $Path)) {
         $t = $line.Trim()
         if ([string]::IsNullOrWhiteSpace($t)) { continue }
         if ($t.StartsWith('#') -or $t.StartsWith('//') -or $t.StartsWith(';')) { continue }
-        if ($t -match '^https?://') { $links += $t }
+        if ($t -notmatch '^https?://') { continue }
+        $key = $t.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) {
+            $dupes++
+            if ($LogFn) { & $LogFn ("Duplicate link skipped (same /dl/ twice): $t") 'warn' }
+            continue
+        }
+        $seen[$key] = $true
+        $links += $t
+    }
+    if ($dupes -gt 0 -and $LogFn) {
+        & $LogFn ("$dupes duplicate URL(s) removed — you need 6 different https://gamebanana.com/dl/... links for 6 mods.") 'warn'
     }
     return @($links)
+}
+
+function Remove-StaleExtractFoldersUnderGz2 {
+    param(
+        [string]$Gz2Root,
+        [scriptblock]$LogFn
+    )
+    if ([string]::IsNullOrWhiteSpace($Gz2Root) -or -not (Test-Path -LiteralPath $Gz2Root -PathType Container)) { return }
+    foreach ($d in @(Get-ChildItem -LiteralPath $Gz2Root -Directory -Recurse -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ieq '_extract' })) {
+        try {
+            Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction Stop
+            if ($LogFn) { & $LogFn ("Removed _extract folder: $($d.FullName)") 'ok' }
+        } catch {
+            if ($LogFn) { & $LogFn ("Could not remove $($d.FullName): $($_.Exception.Message)") 'warn' }
+        }
+    }
+}
+
+function Resolve-GameBananaMergeTarget {
+    param([string]$TargetFolder)
+    if ([string]::IsNullOrWhiteSpace($TargetFolder)) {
+        return @{ Folder = $TargetFolder; PerModSubfolder = $false }
+    }
+    $t = $TargetFolder
+    try {
+        if (Test-Path -LiteralPath $t -PathType Container) {
+            $t = (Resolve-Path -LiteralPath $t).Path
+        }
+    } catch { }
+    # GameBanana mods always sit in their own folder under GZ2 (e.g. "Magic Boomerang 86").
+    if ((Split-Path -Path $t -Leaf) -eq 'GZ2') {
+        return @{ Folder = $t; PerModSubfolder = $true }
+    }
+    $gz2Under = Join-Path $t 'GZ2'
+    if (Test-Path -LiteralPath $gz2Under -PathType Container) {
+        return @{ Folder = (Resolve-Path -LiteralPath $gz2Under).Path; PerModSubfolder = $true }
+    }
+    return @{ Folder = $t; PerModSubfolder = $false }
+}
+
+function Get-GameBananaTempExtractFolder {
+    param(
+        [string]$CacheFolder,
+        [string]$ModName
+    )
+    $tmpRoot = Join-Path $CacheFolder '_tmp_extract'
+    if (-not (Test-Path -LiteralPath $tmpRoot)) {
+        New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
+    }
+    return Join-Path $tmpRoot (Get-SanitizedModFolderName -Name $ModName)
 }
 
 function Get-SanitizedFileNameGui {
@@ -923,26 +1281,26 @@ function Save-WebFileToFolderGui {
     }
     $fileName = $null
     $cd = $resp.Headers['Content-Disposition']
+    if ($cd -is [array]) { $cd = ($cd | Select-Object -First 1) }
     if ($cd) {
-        if ($cd -match "filename\*\s*=\s*UTF-8''([^;]+)") {
+        if ($cd -match "filename\*\s*=\s*UTF-8''([^;]+)" -and $matches -and $matches.Count -gt 1) {
             try { $fileName = [System.Uri]::UnescapeDataString($matches[1].Trim()) } catch { $fileName = $matches[1].Trim() }
-        } elseif ($cd -match 'filename\s*=\s*"([^"]+)"') { $fileName = $matches[1].Trim() }
-        elseif ($cd -match 'filename\s*=\s*([^;]+)') { $fileName = $matches[1].Trim() }
+        } elseif ($cd -match 'filename\s*=\s*"([^"]+)"' -and $matches -and $matches.Count -gt 1) {
+            $fileName = $matches[1].Trim()
+        } elseif ($cd -match 'filename\s*=\s*([^;]+)' -and $matches -and $matches.Count -gt 1) {
+            $fileName = $matches[1].Trim()
+        }
     }
     if (-not $fileName) { try { $fileName = [System.IO.Path]::GetFileName($resp.ResponseUri.LocalPath) } catch {} }
     if (-not $fileName) { $fileName = "gamebanana-$([guid]::NewGuid().ToString('N').Substring(0,8)).bin" }
     $fileName = Get-SanitizedFileNameGui -Name $fileName
     $destPath = Join-Path $DestinationFolder $fileName
-    $i = 1
-    while (Test-Path -LiteralPath $destPath) {
-        $base = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
-        $ext  = [System.IO.Path]::GetExtension($fileName)
-        $destPath = Join-Path $DestinationFolder ("$base ($i)$ext")
-        $i++
+    if (Test-Path -LiteralPath $destPath) {
+        Remove-Item -LiteralPath $destPath -Force -ErrorAction SilentlyContinue
     }
     if ($LogFn) { & $LogFn ("  -> $(Split-Path $destPath -Leaf)") 'dim' }
     $stream = $resp.GetResponseStream()
-    $fs = [System.IO.File]::OpenWrite($destPath)
+    $fs = [System.IO.File]::Create($destPath)
     try {
         $buf = New-Object byte[] 65536
         while (($r = $stream.Read($buf, 0, $buf.Length)) -gt 0) { $fs.Write($buf, 0, $r) }
@@ -966,7 +1324,9 @@ function Add-ModFolderToDestinationGui {
         [string]$ModLabel,
         [scriptblock]$LogFn,
         $ProgressBar,
-        [bool]$OpenExplorer = $true
+        [bool]$OpenExplorer = $true,
+        [string]$Gz2Root = '',
+        [switch]$PlaceByStyleNameUnderGz2
     )
     if (-not (Test-Path -LiteralPath $ModFolder -PathType Container)) {
         if ($LogFn) { & $LogFn ("Mod folder not found: $ModFolder") 'err' }
@@ -974,10 +1334,13 @@ function Add-ModFolderToDestinationGui {
     }
     if (-not $ModLabel) { $ModLabel = Split-Path $ModFolder -Leaf }
     if ($LogFn) { & $LogFn ("=== Adding mod: $ModLabel ===") 'accent' }
+    if ($LogFn) { & $LogFn ("  Destination: $TargetFolder") 'dim' }
 
     $contentRoot = Resolve-ModContentRoot -ExtractedFolder $ModFolder
     if ($LogFn) { & $LogFn ("  Pack root: $contentRoot") 'dim' }
-    $convert = Invoke-PngToDdsForFolder -Folder $contentRoot -LogFn $LogFn -ProgressBar $ProgressBar -PromptForStyle $true
+    $skipPicker = Get-StylePickerSkipPreference
+    $convert = Invoke-PngToDdsForFolder -Folder $contentRoot -LogFn $LogFn -ProgressBar $ProgressBar `
+        -PromptForStyle (-not $skipPicker) -EntireTree $skipPicker
     $styleLimit = @($convert.SelectedStyleFolders)
 
     if (-not (Test-IsGz2TexturePackRoot -Folder $contentRoot) -and @(Get-ModStyleChoices -RootFolder $contentRoot).Count -ge 2 -and $styleLimit.Count -eq 0) {
@@ -986,31 +1349,60 @@ function Add-ModFolderToDestinationGui {
     }
     if ($styleLimit.Count -eq 0) { $styleLimit = @($contentRoot) }
 
-    foreach ($sf in $styleLimit) {
-        $leaf = Split-Path $sf -Leaf
-        $destPreview = Join-Path $TargetFolder $leaf
-        if ($LogFn) { & $LogFn ("  -> append into: $destPreview") 'dim' }
+    $styleBatches = @(
+        foreach ($sf in $styleLimit) {
+            $leaf = Split-Path $sf -Leaf
+            $destRoot = $TargetFolder
+            if ($PlaceByStyleNameUnderGz2 -and $Gz2Root) {
+                $destRoot = Join-Path $Gz2Root $leaf
+                if (-not (Test-Path -LiteralPath $destRoot)) {
+                    New-Item -ItemType Directory -Path $destRoot -Force | Out-Null
+                }
+            }
+            [pscustomobject]@{
+                StyleFolder = $sf
+                DestRoot    = $destRoot
+            }
+        }
+    )
+
+    foreach ($batch in $styleBatches) {
+        if ($LogFn) { & $LogFn ("  -> mod folder: $($batch.DestRoot)") 'dim' }
     }
 
-    $entries = @(Get-ModAppendFileEntries -ModRoot $contentRoot -LimitToStyleFolders $styleLimit)
-    if ($entries.Count -eq 0) {
-        if ($LogFn) { & $LogFn ("No mod files to append after style filter (preview PNGs skipped).") 'warn' }
+    $totalCopied = 0
+    foreach ($batch in $styleBatches) {
+        $entries = @(Get-ModAppendFileEntries -ModRoot $contentRoot -LimitToStyleFolders @($batch.StyleFolder))
+        if ($entries.Count -eq 0) {
+            if ($LogFn) { & $LogFn ("No files for style: $(Split-Path $batch.StyleFolder -Leaf)") 'warn' }
+            continue
+        }
+        $targetFiles = @(Get-ChildItem -LiteralPath $batch.DestRoot -File -Recurse -ErrorAction SilentlyContinue)
+        $plan = New-Object System.Collections.Generic.List[object]
+        $already = @{}
+        Add-AppendEntriesToPlan -PlanList $plan -SourceEntries $entries -TargetFolder $batch.DestRoot `
+            -TargetFiles $targetFiles -AlreadyPlannedByName $already -UseImportedFolders:$false
+        if ($plan.Count -eq 0) {
+            if ($LogFn) { & $LogFn ("Nothing new for $(Split-Path $batch.DestRoot -Leaf) — already up to date.") 'dim' }
+            continue
+        }
+        if ($LogFn) { & $LogFn ("Copying $($plan.Count) .dds into $(Split-Path $batch.DestRoot -Leaf)...") 'accent' }
+        try {
+            Invoke-Plan -Plan @($plan.ToArray())
+            $totalCopied += $plan.Count
+        } catch {
+            if ($LogFn) { & $LogFn ("Copy failed for $(Split-Path $batch.DestRoot -Leaf): $($_.Exception.Message)") 'err' }
+        }
+    }
+
+    if ($totalCopied -eq 0) {
+        if ($LogFn) { & $LogFn 'No mod files copied (all already present or none after style filter).' 'warn' }
         return
     }
-    $targetFiles = @(Get-ChildItem -LiteralPath $TargetFolder -File -Recurse -ErrorAction SilentlyContinue)
-    $plan = New-Object System.Collections.Generic.List[object]
-    $already = @{}
-    Add-AppendEntriesToPlan -PlanList $plan -SourceEntries $entries -TargetFolder $TargetFolder `
-        -TargetFiles $targetFiles -AlreadyPlannedByName $already
-    if ($plan.Count -eq 0) {
-        if ($LogFn) { & $LogFn ("Nothing new to add - all files already exist in destination.") 'warn' }
-        return
-    }
-    if ($LogFn) { & $LogFn ("Appending $($plan.Count) file(s) into base pack folders...") 'accent' }
-    Invoke-Plan -Plan @($plan)
     if ($OpenExplorer) {
-        Open-ExplorerForAppendPlan -Plan @($plan) -TargetFolder $TargetFolder
-        if ($LogFn) { & $LogFn 'Opened destination folder in File Explorer.' 'dim' }
+        $explore = if ($Gz2Root) { $Gz2Root } else { $TargetFolder }
+        Open-FolderInExplorer $explore | Out-Null
+        if ($LogFn) { & $LogFn 'Opened GZ2 folder in File Explorer.' 'dim' }
     }
 }
 
@@ -1027,21 +1419,40 @@ function Invoke-GameBananaDownloadToCache {
     }
     $cache = $DownloadFolder
     if (-not (Test-Path -LiteralPath $cache)) { New-Item -ItemType Directory -Path $cache -Force | Out-Null }
-    $links = @(Get-GameBananaLinksFromFile -Path $LinksFile)
+    $links = @(Get-GameBananaLinksFromFile -Path $LinksFile -LogFn $LogFn)
+    if ($null -eq $links) { $links = @() }
     if ($links.Count -eq 0) {
         if ($LogFn) { & $LogFn ("No URLs found in $LinksFile") 'warn' }
         return @()
     }
     if ($ProgressBar) { Reset-GlowProgress -Bar $ProgressBar -Max $links.Count }
-    if ($LogFn) { & $LogFn ("Downloading $($links.Count) mod(s) to cache: $cache") 'accent' }
+    if ($LogFn) { & $LogFn ("Downloading $($links.Count) unique mod link(s) to cache: $cache") 'accent' }
+    foreach ($old in @(Get-ChildItem -LiteralPath $cache -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -match ' \(\d+\)$' })) {
+        try {
+            Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue
+            if ($LogFn) { & $LogFn ("Removed old duplicate zip: $($old.Name)") 'dim' }
+        } catch { }
+    }
     $downloaded = @()
+    $failed = 0
     for ($i = 0; $i -lt $links.Count; $i++) {
         if ($LogFn) { & $LogFn ("[$($i+1)/$($links.Count)] $($links[$i])") 'fg' }
         $f = Save-WebFileToFolderGui -Url $links[$i] -DestinationFolder $cache -LogFn $LogFn
         if ($f) { $downloaded += $f }
+        else {
+            $failed++
+            if ($LogFn) { & $LogFn ("  Download failed or skipped for link $($i+1).") 'err' }
+        }
         if ($ProgressBar) {
             Set-GlowProgressState -Bar $ProgressBar -Value ($i + 1)
             [System.Windows.Forms.Application]::DoEvents()
+        }
+    }
+    if ($LogFn) {
+        if ($failed -gt 0) {
+            & $LogFn ("Downloaded $($downloaded.Count) of $($links.Count) — $failed link(s) failed. Check URLs in gamebanana-mods.txt.") 'warn'
+        } else {
+            & $LogFn ("All $($downloaded.Count) mod zip(s) downloaded.") 'ok'
         }
     }
     return @($downloaded)
@@ -1053,7 +1464,8 @@ function Invoke-GameBananaExtractAndMerge {
         [string]$DownloadFolder,
         [scriptblock]$LogFn,
         $ProgressBar,
-        [string[]]$DownloadedFiles
+        [string[]]$DownloadedFiles,
+        [switch]$PerModSubfolder
     )
     if ([string]::IsNullOrWhiteSpace($DownloadFolder)) {
         $DownloadFolder = Get-GameBananaDownloadFolder
@@ -1068,38 +1480,94 @@ function Invoke-GameBananaExtractAndMerge {
         if ($LogFn) { & $LogFn 'No downloaded archives in cache to extract.' 'warn' }
         return
     }
-    if ($LogFn) { & $LogFn ("Unzipping $($files.Count) archive(s), style picker, PNG to DDS, append missing into base pack...") 'accent' }
+    if ($PerModSubfolder) {
+        if ($LogFn) { & $LogFn ("Unzipping $($files.Count) archive(s) -> one folder per mod under GZ2 (replaces existing)...") 'accent' }
+        Remove-NumberedDuplicateModFolders -Gz2Root $TargetFolder -LogFn $LogFn
+        Remove-StaleExtractFoldersUnderGz2 -Gz2Root $TargetFolder -LogFn $LogFn
+    } else {
+        if ($LogFn) { & $LogFn ("Unzipping $($files.Count) archive(s), PNG to DDS, merge into pack...") 'accent' }
+    }
     if ($ProgressBar) { Reset-GlowProgress -Bar $ProgressBar -Max $files.Count }
     $knownZipExt = @('.zip', '.ziparchive', '.zipx', '.pk3', '.pk4')
     $archiveIdx = 0
+    $modsOk = 0
+    $modsFailed = 0
     foreach ($file in $files) {
         $archiveIdx++
+        $extracted = $null
+        $modDest = $null
+        $modName = [System.IO.Path]::GetFileNameWithoutExtension($file)
         try {
             $ext = [System.IO.Path]::GetExtension($file).ToLowerInvariant()
-            $modName = [System.IO.Path]::GetFileNameWithoutExtension($file)
+            $modName = Get-ModFolderNameFromArchive -ArchivePath $file
             $isZip = ($ext -in $knownZipExt) -or (Test-IsZipArchive -Path $file)
             if (-not $isZip) {
                 if ($LogFn) { & $LogFn ("Skipping '$modName' - not a recognized archive.") 'warn' }
                 continue
             }
-            $extracted = Join-Path $cache ($modName + '_extracted')
+            $modDest = $TargetFolder
+            $placeByStyle = $false
+            if ($PerModSubfolder) {
+                $placeByStyle = $true
+                if ($LogFn) { & $LogFn ("  -> GZ2 mod folder(s) under: $TargetFolder") 'ok' }
+                $extracted = Get-GameBananaTempExtractFolder -CacheFolder $cache -ModName $modName
+            } else {
+                $extracted = Join-Path $cache ($modName + '_extracted')
+            }
+            if (Test-Path -LiteralPath $extracted) {
+                Remove-Item -LiteralPath $extracted -Recurse -Force -ErrorAction SilentlyContinue
+            }
             try { Expand-ZipToFolderGui -ZipPath $file -DestinationFolder $extracted }
             catch {
                 if ($LogFn) { & $LogFn ("Extract failed for '$modName': $($_.Exception.Message)") 'err' }
                 continue
             }
-            Add-ModFolderToDestinationGui -ModFolder $extracted -TargetFolder $TargetFolder -ModLabel $modName `
-                -LogFn $LogFn -ProgressBar $ProgressBar -OpenExplorer $false
+            Add-ModFolderToDestinationGui -ModFolder $extracted -TargetFolder $modDest -ModLabel $modName `
+                -LogFn $LogFn -ProgressBar $ProgressBar -OpenExplorer $false `
+                -Gz2Root $(if ($placeByStyle) { $TargetFolder } else { '' }) `
+                -PlaceByStyleNameUnderGz2:$placeByStyle
+            $modsOk++
+        }
+        catch {
+            $modsFailed++
+            if ($LogFn) { & $LogFn ("Mod '$modName' failed: $($_.Exception.Message)") 'err' }
         }
         finally {
+            if ($extracted -and (Test-Path -LiteralPath $extracted)) {
+                try {
+                    Remove-Item -LiteralPath $extracted -Recurse -Force -ErrorAction SilentlyContinue
+                } catch { }
+            }
+            if ($PerModSubfolder -and $modDest -and -not $placeByStyle) {
+                $legacyExtract = Join-Path $modDest '_extract'
+                if (Test-Path -LiteralPath $legacyExtract) {
+                    try {
+                        Remove-Item -LiteralPath $legacyExtract -Recurse -Force -ErrorAction SilentlyContinue
+                        if ($LogFn) { & $LogFn '  Cleaned old _extract under mod folder.' 'dim' }
+                    } catch { }
+                }
+            }
             if ($ProgressBar) {
                 Set-GlowProgressState -Bar $ProgressBar -Value $archiveIdx
                 [System.Windows.Forms.Application]::DoEvents()
             }
         }
     }
-    if ($LogFn) { & $LogFn 'Opening base pack in File Explorer...' 'dim' }
-    Open-FolderInExplorer $TargetFolder | Out-Null
+    $tmpRoot = Join-Path $cache '_tmp_extract'
+    if (Test-Path -LiteralPath $tmpRoot) {
+        try {
+            if (-not @(Get-ChildItem -LiteralPath $tmpRoot -Force -ErrorAction SilentlyContinue).Count) {
+                Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
+    }
+    if ($LogFn) {
+        if ($modsFailed -gt 0) {
+            & $LogFn ("GameBanana mods done: $modsOk OK, $modsFailed failed (see log above).") 'warn'
+        } else {
+            & $LogFn ("GameBanana mods done: $modsOk mod(s) processed.") 'ok'
+        }
+    }
 }
 
 function Invoke-GameBananaBatchFromFile {
@@ -1108,7 +1576,8 @@ function Invoke-GameBananaBatchFromFile {
         [string]$TargetFolder,
         [scriptblock]$LogFn,
         $ProgressBar,
-        [switch]$DownloadOnly
+        [switch]$DownloadOnly,
+        [switch]$PerModSubfolder
     )
     $dlFolder = Get-GameBananaDownloadFolder
     $downloaded = @(Invoke-GameBananaDownloadToCache -LinksFile $LinksFile -DownloadFolder $dlFolder -LogFn $LogFn -ProgressBar $ProgressBar)
@@ -1117,7 +1586,8 @@ function Invoke-GameBananaBatchFromFile {
         Open-FolderInExplorer $dlFolder | Out-Null
         return
     }
-    Invoke-GameBananaExtractAndMerge -TargetFolder $TargetFolder -DownloadFolder $dlFolder -LogFn $LogFn -ProgressBar $ProgressBar -DownloadedFiles $downloaded
+    Invoke-GameBananaExtractAndMerge -TargetFolder $TargetFolder -DownloadFolder $dlFolder -LogFn $LogFn `
+        -ProgressBar $ProgressBar -DownloadedFiles $downloaded -PerModSubfolder:$PerModSubfolder
 }
 
 # ---------------------------------------------------------------------------
@@ -1742,11 +2212,7 @@ function Show-TextureGlitchyDialog {
         if (-not $QuietLog) {
             $logFn = {
                 param($msg, $kind)
-                $color = switch ($kind) {
-                    'err' { $ColorErr }; 'warn' { $ColorWarn }; 'ok' { $ColorOk }
-                    'accent' { $ColorAccent }; 'dim' { $ColorFgDim }; default { $ColorFg }
-                }
-                Write-Log $msg $color
+                Write-Log -Message $msg -Color (Get-LogColorByKind $kind)
             }
             if ($script:glassLog) { $script:glassLog.ClearLines() }
             & $logFn '=== Mod ZIP safety scan ===' 'accent'
@@ -1837,11 +2303,7 @@ function Show-TextureGlitchyDialog {
             Set-Status 'Installing mod into ISO...' $ColorAccent2
             $logFn = {
                 param($msg, $kind)
-                $color = switch ($kind) {
-                    'err' { $ColorErr }; 'warn' { $ColorWarn }; 'ok' { $ColorOk }
-                    'accent' { $ColorAccent }; 'dim' { $ColorFgDim }; default { $ColorFg }
-                }
-                Write-Log $msg $color
+                Write-Log -Message $msg -Color (Get-LogColorByKind $kind)
             }
             & $logFn '=== Install mod into ISO (GCFT) ===' 'accent'
             $outPath = Invoke-InstallZipToGcm -GcmPath $iso -ZipPath $zip -InPlace $inPlace -LogFn $logFn
@@ -1952,9 +2414,16 @@ function ConvertTo-ImportedRelativePath {
 }
 
 function Get-ImportedDestinationPath {
-    param([string]$SourceFolder, [string]$TargetFolder, [System.IO.FileInfo]$SourceFile)
-    # Merge into the base pack using the same subfolders as the source (no -Imported suffix).
+    param(
+        [string]$SourceFolder,
+        [string]$TargetFolder,
+        [System.IO.FileInfo]$SourceFile,
+        [bool]$UseImportedFolders = $false
+    )
     $rel = Get-RelativePathFromFolder -BaseFolder $SourceFolder -FullPath $SourceFile.FullName
+    if ($UseImportedFolders) {
+        $rel = ConvertTo-ImportedRelativePath -RelativePath $rel
+    }
     return Join-Path -Path $TargetFolder -ChildPath $rel
 }
 
@@ -1978,33 +2447,36 @@ function Add-AppendEntriesToPlan {
         [Parameter(Mandatory)]$PlanList,
         [Parameter(Mandatory)]$SourceEntries,
         [Parameter(Mandatory)][string]$TargetFolder,
-        [Parameter(Mandatory)][System.IO.FileInfo[]]$TargetFiles,
-        [Parameter(Mandatory)][hashtable]$AlreadyPlannedByName
+        [AllowEmptyCollection()]
+        [System.IO.FileInfo[]]$TargetFiles = @(),
+        [Parameter(Mandatory)][hashtable]$AlreadyPlannedByName,
+        [bool]$UseImportedFolders = $false
     )
-    $targetNames = @{}
-    $targetTexturesByKey = @{}
-    foreach ($t in $TargetFiles) {
-        $targetNames[$t.Name] = $true
-        if (Test-DdsOrPngFile -File $t) {
-            $mk = Get-ReplacementMatchKey -File $t
-            $targetTexturesByKey[$mk] = $true
-        }
+    # Match by relative path (CREATURE\tex1.dds, CREATURE-Imported\tex1.dds) — not filename alone.
+    $targetRelPaths = @{}
+    if ($null -eq $TargetFiles) { $TargetFiles = @() }
+    foreach ($t in @($TargetFiles)) {
+        $rel = Get-RelativePathFromFolder -BaseFolder $TargetFolder -FullPath $t.FullName
+        $targetRelPaths[$rel.ToLowerInvariant()] = $true
     }
     foreach ($e in $SourceEntries) {
         $sf = $e.File
-        if ($targetNames.ContainsKey($sf.Name)) { continue }
-        if (Test-DdsOrPngFile -File $sf) {
-            $mk = Get-ReplacementMatchKey -File $sf
-            if ($targetTexturesByKey.ContainsKey($mk)) { continue }
-        }
-        if ($AlreadyPlannedByName.ContainsKey($sf.Name)) { continue }
-        $dest = Get-ImportedDestinationPath -SourceFolder $e.Root -TargetFolder $TargetFolder -SourceFile $sf
+        $relNormal = Get-RelativePathFromFolder -BaseFolder $e.Root -FullPath $sf.FullName
+        $dest = Get-ImportedDestinationPath -SourceFolder $e.Root -TargetFolder $TargetFolder -SourceFile $sf `
+            -UseImportedFolders:$UseImportedFolders
+        $destRel = Get-RelativePathFromFolder -BaseFolder $TargetFolder -FullPath $dest
+        $destKey = $destRel.ToLowerInvariant()
+        $normalKey = $relNormal.ToLowerInvariant()
+        if ($targetRelPaths.ContainsKey($destKey)) { continue }
+        if ($targetRelPaths.ContainsKey($normalKey)) { continue }
+        if ($AlreadyPlannedByName.ContainsKey($destKey)) { continue }
+        if ($AlreadyPlannedByName.ContainsKey($normalKey)) { continue }
         $PlanList.Add([pscustomobject]@{
             Source      = $sf
             Destination = $dest
             Action      = 'Append'
         })
-        $AlreadyPlannedByName[$sf.Name] = $true
+        $AlreadyPlannedByName[$destKey] = $true
     }
 }
 
@@ -3087,14 +3559,14 @@ foreach ($b in @($scanBtn, $runBtn, $clearBtn)) { $b.BringToFront() }
 $script:GbCardHeight = 118
 $script:PngCardHeight = 146
 $gbCardY = $actionsCardY + $script:ActionsCardHeight + 12
-$gbCard = New-ThemedPanel -Title 'GameBanana downloader  -  optional, separate from merge'
+$gbCard = New-ThemedPanel -Title 'GameBanana  -  download, convert PNG, merge into your GZ2 pack'
 $gbCard.Location = New-Object System.Drawing.Point(20, $gbCardY)
 $gbCard.Size = New-Object System.Drawing.Size(($form.ClientSize.Width - 40), $script:GbCardHeight)
 $gbCard.Anchor = 'Top,Left,Right'
 $mainPanel.Controls.Add($gbCard)
 
 $gbHint = New-Object System.Windows.Forms.Label
-$gbHint.Text = 'Put gamebanana-mods.txt next to launcher.bat — mod zips download to that same folder on any PC. One https://gamebanana.com/dl/... URL per line.'
+$gbHint.Text = 'One folder per mod under output\GZ2. Re-downloading replaces the same mod folder (no (1) (2) copies). Edit gamebanana-mods.txt for URLs.'
 $gbHint.Location = New-Object System.Drawing.Point(20, 30)
 $gbHint.Size = New-Object System.Drawing.Size(820, 36)
 $gbHint.ForeColor = $ColorFg
@@ -3119,6 +3591,7 @@ $gbLinksBox.BackColor = $ColorBgInput
 $gbLinksBox.ForeColor = $ColorFg
 $gbLinksBox.BorderStyle = 'FixedSingle'
 $gbLinksBox.Text = Ensure-GameBananaLinksFile -Root (Get-ModMergerAppFolder)
+$gbLinksBox.Add_Leave({ Export-ModMergerSettings })
 $gbCard.Controls.Add($gbLinksBox)
 
 $gbLinksBrowse = New-Object System.Windows.Forms.Button
@@ -3134,7 +3607,7 @@ $gbLinksBrowse.FlatAppearance.MouseOverBackColor = $ColorBorder
 $gbCard.Controls.Add($gbLinksBrowse)
 
 $gbDownloadBtn = New-Object System.Windows.Forms.Button
-$gbDownloadBtn.Text = 'Download mods'
+$gbDownloadBtn.Text = 'Download & merge'
 $gbDownloadBtn.Location = New-Object System.Drawing.Point(765, 67)
 $gbDownloadBtn.Size = New-Object System.Drawing.Size(115, 28)
 $gbDownloadBtn.Anchor = 'Top,Right'
@@ -3155,7 +3628,7 @@ $pngCard.Anchor = 'Top,Left,Right'
 $mainPanel.Controls.Add($pngCard)
 
 $pngHint = New-Object System.Windows.Forms.Label
-$pngHint.Text = 'Convert opens the thumbnail style picker when this folder has several style subfolders (like before). Check options below to skip that or convert every PNG.'
+$pngHint.Text = 'If a mod has several shields/styles, a picture picker opens automatically (preview PNG = not named tex*). Only tex*.png becomes DDS. Uncheck skip-picker only if you want all folders at once.'
 $pngHint.Location = New-Object System.Drawing.Point(20, 28)
 $pngHint.Size = New-Object System.Drawing.Size(820, 36)
 $pngHint.ForeColor = $ColorFg
@@ -3326,12 +3799,25 @@ $openLogDirBtn.Add_Click({
     }
 })
 
+$form.Add_FormClosing({
+    Export-ModMergerSettings
+})
+
 $form.Add_Load({
     if ($script:glassLog) { $script:glassLog.Invalidate() }
     $app = Get-ModMergerAppFolder
+    Import-ModMergerSettings
     if ($gbLinksBox) {
-        $p = Ensure-GameBananaLinksFile -Root $app
-        if ([string]::IsNullOrWhiteSpace($gbLinksBox.Text)) { $gbLinksBox.Text = $p }
+        if ([string]::IsNullOrWhiteSpace($gbLinksBox.Text)) {
+            $gbLinksBox.Text = Ensure-GameBananaLinksFile -Root $app
+        } elseif (-not (Test-Path -LiteralPath $gbLinksBox.Text -PathType Leaf)) {
+            $fallback = Get-GameBananaLinksFilePath -Root $app
+            if (Test-Path -LiteralPath $fallback -PathType Leaf) {
+                $gbLinksBox.Text = $fallback
+            } else {
+                $gbLinksBox.Text = Ensure-GameBananaLinksFile -Root $app
+            }
+        }
     }
     if ($dstBox -and [string]::IsNullOrWhiteSpace($dstBox.Text)) {
         foreach ($c in @((Join-Path $app 'GZ2'), (Join-Path $app 'henriko\GZ2'), $app)) {
@@ -3350,6 +3836,14 @@ $form.Add_Load({
         }
     }
     Import-SessionLogFilesToView -Append -ReportMissing
+    if ($gbLinksBox -and (Test-Path -LiteralPath $gbLinksBox.Text -PathType Leaf)) {
+        $nGb = @(Get-GameBananaLinksFromFile -Path $gbLinksBox.Text).Count
+        $gbLogColor = if ($nGb -gt 0) { $script:ColorOk } else { $script:ColorWarn }
+        Write-Log -Message ("GameBanana links: $nGb URL(s) in $($gbLinksBox.Text)") -Color $gbLogColor
+        if ($nGb -eq 0) {
+            Write-Log 'Tip: open gamebanana-mods.txt in Notepad, add https://gamebanana.com/dl/... lines, save.' $ColorFgDim
+        }
+    }
     Write-Log '--- Live session ---' $ColorAccent
     Write-Log ("Build $($script:GuiBuildTag) — errors in red, warnings in yellow, OK in green.") $ColorFgDim
     Write-Log ("Log files on disk: _err.txt, merge-run.log, mod-merger.log") $ColorFgDim
@@ -3547,9 +4041,14 @@ function Write-RunLogFile {
 function Write-Log {
     param(
         [string]$Message,
-        [System.Drawing.Color]$Color = $null
+        [AllowNull()]
+        $Color
     )
+    if ($Color -is [string] -and -not [string]::IsNullOrWhiteSpace($Color)) {
+        $Color = Get-LogColorByKind $Color
+    }
     if ($null -eq $Color) { $Color = (Get-LogLineColor $Message) }
+    if ($null -eq $Color) { $Color = $script:ColorFg }
     if ($script:glassLog) {
         $script:glassLog.AppendLine($Message, $Color)
     }
@@ -3567,7 +4066,12 @@ function Test-FolderHasTexPng {
 }
 
 function Set-Status {
-    param([string]$Text, [System.Drawing.Color]$Color = $ColorFg)
+    param(
+        [string]$Text,
+        [AllowNull()]
+        [System.Drawing.Color]$Color
+    )
+    if ($null -eq $Color) { $Color = $script:ColorFg }
     $statusLabel.Text = $Text
     $statusLabel.ForeColor = $Color
     [System.Windows.Forms.Application]::DoEvents()
@@ -3788,17 +4292,24 @@ $dstBtn.Add_Click({
         $resolved = Resolve-UserPackFolder -Path $p
         $dstBox.Text = $resolved
         if ($pngFolderBox -and [string]::IsNullOrWhiteSpace($pngFolderBox.Text)) { $pngFolderBox.Text = $resolved }
+        Export-ModMergerSettings
     }
 })
 
 $srcBtn.Add_Click({
     $p = Select-FolderInteractive -Description '2. ADD FROM - The OTHER pack (missing files copy FROM here). Pick TPHD folder or TPHD\GZ2 — app finds GZ2 automatically.' -InitialPath $srcBox.Text
-    if ($p) { $srcBox.Text = Resolve-UserPackFolder -Path $p }
+    if ($p) {
+        $srcBox.Text = Resolve-UserPackFolder -Path $p
+        Export-ModMergerSettings
+    }
 })
 
 $outBtn.Add_Click({
     $p = Select-FolderInteractive -Description '3. OUTPUT FOLDER - Where the merged pack is saved (leave empty to merge in place into the base pack)' -InitialPath $outBox.Text
-    if ($p) { $outBox.Text = $p }
+    if ($p) {
+        $outBox.Text = $p
+        Export-ModMergerSettings
+    }
 })
 
 $pngBrowseBtn.Add_Click({
@@ -3867,11 +4378,7 @@ $convertPngBtn.Add_Click({
         } else {
             $logFn = {
                 param($msg, $kind)
-                $color = switch ($kind) {
-                    'err' { $ColorErr }; 'warn' { $ColorWarn }; 'ok' { $ColorOk }
-                    'accent' { $ColorAccent }; 'dim' { $ColorFgDim }; default { $ColorFg }
-                }
-                Write-Log $msg $color
+                Write-Log -Message $msg -Color (Get-LogColorByKind $kind)
             }
             $includeAll = $false
             if ($pngConvertAllBox) { $includeAll = $pngConvertAllBox.Checked }
@@ -3946,64 +4453,89 @@ $gbLinksBrowse.Add_Click({
     }
     if ($ofd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $gbLinksBox.Text = $ofd.FileName
+        Export-ModMergerSettings
     }
 })
 
-$gbDownloadBtn.Add_Click((Wrap-SafeUiEvent {
-    if ([string]::IsNullOrWhiteSpace($gbLinksBox.Text) -or -not (Test-Path -LiteralPath $gbLinksBox.Text -PathType Leaf)) {
-        [System.Windows.Forms.MessageBox]::Show(
-            'Choose a .txt file with one direct GameBanana download URL per line.',
-            'Links file required', 'OK', 'Warning') | Out-Null
-    }
-    else {
-    $gbDownloadBtn.Enabled = $false
-    $convertPngBtn.Enabled = $false
-    $scanBtn.Enabled = $false; $runBtn.Enabled = $false; $testBarBtn.Enabled = $false; $isoInstallBtn.Enabled = $false; $aboutBtn.Enabled = $false
-    Reset-GlowProgress -Bar $progress -Max 1
-    $statusLabel.ForeColor = $ColorFg
-    $statusLabel.Text = 'Downloading GameBanana mods...'
-    $logFn = {
-        param($msg, $kind)
-        $color = switch ($kind) {
-            'err'    { $ColorErr }
-            'warn'   { $ColorWarn }
-            'ok'     { $ColorOk }
-            'accent' { $ColorFg }
-            'dim'    { $ColorFg }
-            default  { $ColorFg }
-        }
-        Write-Log $msg $color
-    }
+$gbDownloadBtn.Add_Click({
     try {
-        $dlFolder = Get-GameBananaDownloadFolder
-        & $logFn '--- GameBanana downloader ---' 'accent'
-        & $logFn "Download folder (app folder): $dlFolder" 'dim'
-        & $logFn "Links file: $($gbLinksBox.Text)" 'dim'
-        $hasDst = (-not [string]::IsNullOrWhiteSpace($dstBox.Text)) -and (Test-Path -LiteralPath $dstBox.Text -PathType Container)
-        if ($hasDst) {
-            $dst = (Resolve-Path -LiteralPath $dstBox.Text).Path
-            & $logFn "Merge into base pack: $dst" 'dim'
-            Invoke-GameBananaBatchFromFile -LinksFile $gbLinksBox.Text -TargetFolder $dst -LogFn $logFn -ProgressBar $progress
-        } else {
-            & $logFn 'No base pack set — downloading only (zips saved in app folder).' 'warn'
-            Invoke-GameBananaBatchFromFile -LinksFile $gbLinksBox.Text -LogFn $logFn -ProgressBar $progress -DownloadOnly
+        if ([string]::IsNullOrWhiteSpace($gbLinksBox.Text) -or -not (Test-Path -LiteralPath $gbLinksBox.Text -PathType Leaf)) {
+            [System.Windows.Forms.MessageBox]::Show($form,
+                'Choose a .txt file with one direct GameBanana download URL per line.',
+                'Links file required', 'OK', 'Warning') | Out-Null
+            return
         }
-        $statusLabel.Text = 'GameBanana download finished.'
+
+        $outPath = ''
+        try { if ($null -ne $outBox) { $outPath = [string]$outBox.Text } } catch { $outPath = '' }
+
+        $gbDownloadBtn.Enabled = $false
+        $convertPngBtn.Enabled = $false
+        $scanBtn.Enabled = $false; $runBtn.Enabled = $false; $testBarBtn.Enabled = $false; $isoInstallBtn.Enabled = $false; $aboutBtn.Enabled = $false
+        if ($null -ne $progress) { Reset-GlowProgress -Bar $progress -Max 1 }
+        $statusLabel.ForeColor = $ColorFg
+        $statusLabel.Text = 'Download & merge...'
+        [System.Windows.Forms.Application]::DoEvents()
+
+        $logFn = {
+            param($msg, $kind)
+            Write-Log -Message $msg -Color (Get-LogColorByKind $kind)
+        }
+
+        $dlFolder = Get-GameBananaDownloadFolder
+        $outputParent = Get-DownloadMergeOutputParent -OutputPath $outPath
+        $gz2Root = Ensure-DownloadMergeGz2Root -OutputParent $outputParent
+        & $logFn '--- Download & merge (one folder per mod under GZ2) ---' 'accent'
+        & $logFn ("Build $($script:GuiBuildTag)") 'dim'
+        & $logFn "Zips save to: $dlFolder" 'dim'
+        & $logFn "Links file: $($gbLinksBox.Text)" 'dim'
+        & $logFn "Output parent: $outputParent" 'ok'
+        & $logFn "GZ2 root: $gz2Root" 'ok'
+        & $logFn 'Each mod -> GZ2\<mod name>\CREATURE, MENU, ...' 'dim'
+
+        $linkCount = @(Get-GameBananaLinksFromFile -Path $gbLinksBox.Text).Count
+        if ($linkCount -eq 0) {
+            & $logFn 'No download URLs in links file (need https://gamebanana.com/dl/... lines).' 'warn'
+            $statusLabel.Text = 'No links to download.'
+            $statusLabel.ForeColor = $ColorWarn
+            return
+        }
+        & $logFn "Found $linkCount download link(s)." 'ok'
+
+        $dry = $false
+        try { $dry = [bool]$dryRunBox.Checked } catch { $dry = $false }
+        if ($dry) {
+            & $logFn 'Dry run is ON — no files will be written.' 'warn'
+            $statusLabel.Text = 'Dry run — no files written.'
+            $statusLabel.ForeColor = $ColorWarn
+            return
+        }
+
+        & $logFn 'Downloading, unzipping, PNG -> DDS, building per-mod folders...' 'accent'
+        Invoke-GameBananaBatchFromFile -LinksFile $gbLinksBox.Text -TargetFolder $gz2Root -LogFn $logFn `
+            -ProgressBar $progress -PerModSubfolder:$true
+        Open-FolderInExplorer -Path $gz2Root -DelayMs 400 | Out-Null
+        $statusLabel.Text = 'Download & merge finished.'
         $statusLabel.ForeColor = $ColorOk
+        Export-ModMergerSettings
     }
     catch {
-        & $logFn ("ERROR: $($_.Exception.Message)") 'err'
-        if ($_.ScriptStackTrace) { & $logFn $_.ScriptStackTrace 'dim' }
-        $statusLabel.Text = 'Download failed - see log.'
+        $errMsg = $_.Exception.Message
+        Write-ErrorLog -Message $errMsg -Title 'Download & merge failed'
+        if ($_.ScriptStackTrace) { Write-Log $_.ScriptStackTrace $ColorFgDim }
+        $statusLabel.Text = "Failed: $errMsg"
         $statusLabel.ForeColor = $ColorErr
+        try {
+            [void][System.Windows.Forms.MessageBox]::Show($form, $errMsg, 'Download & merge failed',
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        } catch { }
     }
     finally {
         $gbDownloadBtn.Enabled = $true
         $convertPngBtn.Enabled = $true
         $scanBtn.Enabled = $true; $runBtn.Enabled = $true; $testBarBtn.Enabled = $true; $isoInstallBtn.Enabled = $true; $aboutBtn.Enabled = $true
     }
-    }
-}))
+})
 
 $testBarBtn.Add_Click({
     try {
@@ -4113,7 +4645,7 @@ function Get-MergePlan {
     Write-Log "Scanning source 1: $SourceFolder" $ColorFgDim
     Set-Status 'Scanning source 1...' $ColorFgDim
     $sourceEntries = New-Object System.Collections.Generic.List[object]
-    foreach ($e in @(Get-AppendEntriesForSourceRoot -Root $SourceFolder -SelectedStyleFolders $Source1StyleFolders)) {
+    foreach ($e in @(Get-AppendEntriesForSourceRoot -Root $SourceFolder -SelectedStyleFolders $Source1StyleFolders -PromptForStyle:$false)) {
         $sourceEntries.Add($e)
     }
 
@@ -4121,7 +4653,7 @@ function Get-MergePlan {
     if ($src2Root) {
         Write-Log "Scanning source 2: $SourceFolder2" $ColorFgDim
         Set-Status 'Scanning source 2...' $ColorFgDim
-        foreach ($e in @(Get-AppendEntriesForSourceRoot -Root $SourceFolder2 -SelectedStyleFolders $Source2StyleFolders)) {
+        foreach ($e in @(Get-AppendEntriesForSourceRoot -Root $SourceFolder2 -SelectedStyleFolders $Source2StyleFolders -PromptForStyle:$false)) {
             $sourceEntries.Add($e)
         }
     }
@@ -4155,18 +4687,18 @@ function Get-MergePlan {
     $plan = New-Object System.Collections.Generic.List[object]
 
     if ($Mode -eq 'Replace') {
-        # Replace mode: allowlist final .dds textures only.
+        # Replace mode: allowlist final .dds textures only (scan resolved GZ2 roots).
         $filtered = New-Object System.Collections.Generic.List[object]
-        foreach ($f in @(Get-ChildItem -LiteralPath $SourceFolder -File -Recurse)) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $src1Root -File -Recurse)) {
             if ($f.Name -in $script:ExcludedFileNames) { continue }
             if (-not (Test-IsAllowedForMerge -File $f)) { continue }
-            $filtered.Add([pscustomobject]@{ File = $f; Root = $SourceFolder })
+            $filtered.Add([pscustomobject]@{ File = $f; Root = $src1Root })
         }
         if ($src2Root) {
-            foreach ($f in @(Get-ChildItem -LiteralPath $SourceFolder2 -File -Recurse)) {
+            foreach ($f in @(Get-ChildItem -LiteralPath $src2Root -File -Recurse)) {
                 if ($f.Name -in $script:ExcludedFileNames) { continue }
                 if (-not (Test-IsAllowedForMerge -File $f)) { continue }
-                $filtered.Add([pscustomobject]@{ File = $f; Root = $SourceFolder2 })
+                $filtered.Add([pscustomobject]@{ File = $f; Root = $src2Root })
             }
         }
         # Build name -> chosen entry map. If duplicates across sources, ask which to use.
@@ -4201,7 +4733,7 @@ function Get-MergePlan {
     else {
         $alreadyPlanned = @{}
         Add-AppendEntriesToPlan -PlanList $plan -SourceEntries $filtered -TargetFolder $TargetFolder `
-            -TargetFiles $targetFiles -AlreadyPlannedByName $alreadyPlanned
+            -TargetFiles $targetFiles -AlreadyPlannedByName $alreadyPlanned -UseImportedFolders:$true
     }
 
     return $plan
@@ -4241,11 +4773,24 @@ function Show-Plan {
 function Invoke-Plan {
     param($Plan)
 
-    $items = @($Plan)
+    $items = @()
+    if ($null -ne $Plan) {
+        if ($Plan -is [System.Collections.Generic.List[object]]) {
+            $items = @($Plan.ToArray())
+        } elseif ($Plan -is [System.Array]) {
+            $items = @($Plan)
+        } elseif ($Plan -is [System.Collections.IEnumerable] -and -not ($Plan -is [string])) {
+            $items = @($Plan)
+        } else {
+            $items = @($Plan)
+        }
+    }
     if ($items.Count -eq 0) { return }
 
     $total = $items.Count
-    Reset-GlowProgress -Bar $progress -Max $total
+    $bar = $null
+    try { if ($null -ne $progress) { $bar = $progress } } catch { }
+    if ($null -ne $bar) { Reset-GlowProgress -Bar $bar -Max $total }
     Write-Log ("Copying $total file(s)... (progress updates every 100 files)") $ColorAccent
     Set-Status "Merging 0 / $total..." $ColorFg
 
@@ -4255,11 +4800,21 @@ function Invoke-Plan {
 
     foreach ($p in $items) {
         try {
-            $destFolder = Split-Path -Path $p.Destination -Parent
+            $destPath = [string]$p.Destination
+            $srcPath = ''
+            if ($null -ne $p.Source) {
+                if ($p.Source -is [System.IO.FileInfo]) { $srcPath = $p.Source.FullName }
+                elseif ($p.Source -is [string]) { $srcPath = $p.Source }
+                else { $srcPath = [string]$p.Source }
+            }
+            if ([string]::IsNullOrWhiteSpace($srcPath) -or [string]::IsNullOrWhiteSpace($destPath)) {
+                throw "Missing source or destination path."
+            }
+            $destFolder = Split-Path -Path $destPath -Parent
             if ($destFolder -and -not (Test-Path -LiteralPath $destFolder -PathType Container)) {
                 New-Item -ItemType Directory -Path $destFolder -Force | Out-Null
             }
-            Copy-Item -LiteralPath $p.Source.FullName -Destination $p.Destination -Force
+            [System.IO.File]::Copy($srcPath, $destPath, $true)
             $ok++
             if ($ok -eq 1 -or $ok % $logEvery -eq 0 -or $ok -eq $total) {
                 Write-Log ("  $ok / $total copied...") $ColorFgDim
@@ -4270,14 +4825,14 @@ function Invoke-Plan {
             $fail++
             Write-Log ("ERR {0}  ({1})" -f $p.Destination, $_.Exception.Message) $ColorErr
         }
-        Step-GlowProgress -Bar $progress
+        if ($null -ne $bar) { Step-GlowProgress -Bar $bar }
         if ($ok % $uiEvery -eq 0) { [System.Windows.Forms.Application]::DoEvents() }
     }
 
-    Write-Log ''
-    $doneColor = if ($fail -gt 0) { $ColorWarn } else { $ColorOk }
-    Write-Log ("Done. Succeeded: $ok   Failed: $fail") $doneColor
-    Set-Status ("Done. $ok ok, $fail failed.") $doneColor
+    Write-Log -Message '' -Color $script:ColorFgDim
+    $doneColor = if ($fail -gt 0) { $script:ColorWarn } else { $script:ColorOk }
+    Write-Log -Message ("Done. Succeeded: $ok   Failed: $fail") -Color $doneColor
+    Set-Status -Text ("Done. $ok ok, $fail failed.") -Color $doneColor
 }
 
 # ---------------------------------------------------------------------------
@@ -4449,6 +5004,77 @@ function Initialize-OutputFromBase {
     return $OutputFolder
 }
 
+function Invoke-LocalFolderMergeStep {
+    param(
+        [ValidateSet('Replace', 'AppendMissing')][string]$Mode,
+        [string]$SourceFolder,
+        [string]$TargetFolder,
+        [bool]$DryRun,
+        [bool]$SkipConfirm,
+        [scriptblock]$LogFn,
+        [string]$StepLabel = 'Merge folders into GZ2 pack'
+    )
+
+    $SourceFolder = Resolve-UserPackFolder -Path $SourceFolder
+    $TargetFolder = Resolve-UserPackFolder -Path $TargetFolder
+    if ($LogFn) {
+        & $LogFn ("=== $StepLabel ===") 'accent'
+        & $LogFn ("  From: $SourceFolder") 'dim'
+        & $LogFn ("  Into: $TargetFolder (CREATURE, MENU, etc.)") 'dim'
+    }
+
+    $src1Styles = @()
+    if ($DryRun) {
+        if ($LogFn) { & $LogFn 'Dry run: would convert PNG in source and merge .dds files.' 'warn' }
+    } elseif (Test-FolderHasTexPng -Folder $SourceFolder) {
+        $skipPicker = Get-StylePickerSkipPreference
+        $r = Invoke-PngToDdsForFolder -Folder $SourceFolder -LogFn $LogFn -ProgressBar $progress `
+            -PromptForStyle (-not $skipPicker) -EntireTree $skipPicker
+        $src1Styles = @($r.SelectedStyleFolders)
+    } elseif ($LogFn) {
+        & $LogFn 'No tex*.png in source — using existing .dds files.' 'dim'
+    }
+
+    $plan = Get-MergePlan -SourceFolder $SourceFolder -SourceFolder2 '' -TargetFolder $TargetFolder -Mode $Mode `
+        -Source1StyleFolders $src1Styles -Source2StyleFolders @()
+    if ($null -eq $plan) {
+        if ($LogFn) { & $LogFn 'Folder merge cancelled (duplicate choice or scan error).' 'warn' }
+        return $false
+    }
+    Show-Plan -Plan @($plan) -Mode $Mode
+    if (@($plan).Count -eq 0) {
+        if ($LogFn) { & $LogFn 'Folder merge: nothing new to copy.' 'warn' }
+        return $true
+    }
+    if ($DryRun) {
+        if ($LogFn) { & $LogFn ("Dry run: would merge $($plan.Count) .dds file(s).") 'warn' }
+        return $true
+    }
+    $doCopy = $true
+    if (-not $SkipConfirm) {
+        $warn = if ($Mode -eq 'Replace') {
+            "Overwrite $($plan.Count) file(s)?`n$TargetFolder"
+        } else {
+            "Copy $($plan.Count) missing .dds file(s) into GZ2 folders?`n$TargetFolder"
+        }
+        try { $form.Activate() } catch {}
+        $c = [System.Windows.Forms.MessageBox]::Show(
+            $form, $warn, 'Confirm folder merge',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning,
+            [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+        $doCopy = ($c -eq [System.Windows.Forms.DialogResult]::Yes)
+    }
+    if (-not $doCopy) {
+        if ($LogFn) { & $LogFn 'Folder merge cancelled by user.' 'warn' }
+        return $false
+    }
+    if ($LogFn) { & $LogFn ("Merging $($plan.Count) .dds into GZ2 subfolders...") 'accent' }
+    Invoke-Plan -Plan @($plan)
+    if ($LogFn) { & $LogFn 'Folder merge done.' 'ok' }
+    return $true
+}
+
 function Invoke-FullMergePipeline {
     param(
         [ValidateSet('Replace', 'AppendMissing')][string]$Mode,
@@ -4465,12 +5091,17 @@ function Invoke-FullMergePipeline {
     Write-Log ("Resolved base pack (GZ2): $BasePack") $ColorFgDim
     Write-Log ("Resolved add from (GZ2): $SourceFolder") $ColorFgDim
 
+    $logFn = {
+        param($msg, $kind)
+        Write-Log -Message $msg -Color (Get-LogColorByKind $kind)
+    }
+
     $linksPath = $null
     if ($IncludeGameBanana) {
         if (Test-GameBananaHasDownloadLinks) {
             $linksPath = (Resolve-Path -LiteralPath $gbLinksBox.Text).Path
-            $nLinks = @(Get-GameBananaLinksFromFile -Path $linksPath).Count
-            Write-Log ("GameBanana: $nLinks download link(s) from $linksPath") $ColorAccent
+            $nLinks = @(Get-GameBananaLinksFromFile -Path $linksPath -LogFn $logFn).Count
+            Write-Log ("GameBanana: $nLinks unique download link(s) from $linksPath") $ColorAccent
         } else {
             Write-Log 'GameBanana: links file has no URLs — skipping mod download.' $ColorWarn
         }
@@ -4481,8 +5112,7 @@ function Invoke-FullMergePipeline {
     if (-not [string]::IsNullOrWhiteSpace($OutputFolder)) {
         $TargetFolder = Initialize-OutputFromBase -BasePack $BasePack -OutputFolder $OutputFolder -DryRun $DryRun -LogFn ({
             param($m, $k)
-            $color = switch ($k) { 'err' { $ColorErr } 'warn' { $ColorWarn } 'ok' { $ColorOk } 'accent' { $ColorAccent } default { $ColorFg } }
-            Write-Log $m $color
+            Write-Log -Message $m -Color (Get-LogColorByKind $k)
         })
     }
 
@@ -4494,19 +5124,6 @@ function Invoke-FullMergePipeline {
         }
     }
 
-    $logFn = {
-        param($msg, $kind)
-        $color = switch ($kind) {
-            'err'    { $ColorErr }
-            'warn'   { $ColorWarn }
-            'ok'     { $ColorOk }
-            'accent' { $ColorFg }
-            'dim'    { $ColorFg }
-            default  { $ColorFg }
-        }
-        Write-Log $msg $color
-    }
-
     $gbDownloads = @()
 
     if ($DryRun) {
@@ -4515,63 +5132,24 @@ function Invoke-FullMergePipeline {
         Write-Log 'Live merge — files will be copied to your target folder.' $ColorOk
     }
 
-    $src1StyleFolders = @()
-
-    Write-Log '=== Step 1/3: Convert PNG -> DDS in "Add from" (if needed) ===' $ColorAccent
-    Set-Status 'Converting PNG in source...' $ColorFg
-    if ($DryRun) {
-        Write-Log 'Dry run: would convert PNGs in source folder with texconv.' $ColorWarn
-    } elseif (Test-FolderHasTexPng -Folder $SourceFolder) {
-        $r1 = Invoke-PngToDdsForFolder -Folder $SourceFolder -LogFn $logFn -ProgressBar $progress -PromptForStyle $true
-        $src1StyleFolders = @($r1.SelectedStyleFolders)
-    } else {
-        Write-Log 'No tex*.png in source — skipping PNG conversion (using existing .dds files).' $ColorFgDim
-    }
-
-    Write-Log '=== Step 2/3: Merge "Add from" into target ===' $ColorAccent
-    Set-Status 'Building merge plan...' $ColorFg
-    $plan = Get-MergePlan -SourceFolder $SourceFolder -SourceFolder2 '' -TargetFolder $TargetFolder -Mode $Mode `
-        -Source1StyleFolders $src1StyleFolders -Source2StyleFolders @()
-    if ($null -eq $plan) {
-        Write-Log 'Folder merge cancelled (duplicate file choice or scan error).' $ColorWarn
-        Set-Status 'Merge cancelled.' $ColorWarn
+    Write-Log 'Shield/style picker runs during PNG convert (Add from, destination, each GameBanana mod). Skip via PNG tab checkbox.' $ColorFgDim
+    Write-Log '=== Step 1-2/4: PNG -> DDS in "Add from", then merge .dds into GZ2 folders ===' $ColorAccent
+    Set-Status 'Merging Add from into base pack...' $ColorFg
+    $folderOk = Invoke-LocalFolderMergeStep -Mode $Mode -SourceFolder $SourceFolder -TargetFolder $TargetFolder `
+        -DryRun $DryRun -SkipConfirm $SkipConfirm -LogFn $logFn -StepLabel 'Merge Add from into base GZ2 pack'
+    if (-not $folderOk -and -not $DryRun) {
+        Set-Status 'Folder merge stopped.' $ColorWarn
         return
     }
-    Show-Plan -Plan @($plan) -Mode $Mode
-    if (@($plan).Count -eq 0) {
-        Write-Log 'Folder merge: nothing to copy from sources.' $ColorWarn
-    } elseif ($DryRun) {
-        Write-Log ("Dry run: would merge $($plan.Count) file(s) from source(s) into destination.") $ColorWarn
-    } else {
-        $doCopy = $true
-        if (-not $SkipConfirm) {
-            $warn = if ($Mode -eq 'Replace') {
-                "Overwrite $($plan.Count) file(s) in destination?`n$TargetFolder"
-            } else {
-                "Copy $($plan.Count) missing file(s) into destination?`n$TargetFolder"
-            }
-            try { $form.Activate() } catch {}
-            $c = [System.Windows.Forms.MessageBox]::Show(
-                $form, $warn, 'Confirm folder merge',
-                [System.Windows.Forms.MessageBoxButtons]::YesNo,
-                [System.Windows.Forms.MessageBoxIcon]::Warning,
-                [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
-            $doCopy = ($c -eq [System.Windows.Forms.DialogResult]::Yes)
-        }
-        if ($doCopy) {
-            Set-Status 'Merging folders...' $ColorFg
-            Invoke-Plan -Plan @($plan)
-        } else {
-            Write-Log 'Folder merge cancelled by user.' $ColorWarn
-        }
-    }
 
-    Write-Log '=== Step 3/3: Convert PNG -> DDS in destination (if needed) ===' $ColorAccent
+    Write-Log '=== Step 3/4: Convert PNG -> DDS in destination (if needed) ===' $ColorAccent
     Set-Status 'Converting PNG in destination...' $ColorFg
     if ($DryRun) {
         Write-Log 'Dry run: would convert PNGs in destination with texconv.' $ColorWarn
     } elseif (Test-FolderHasTexPng -Folder $TargetFolder) {
-        [void](Invoke-PngToDdsForFolder -Folder $TargetFolder -LogFn $logFn -ProgressBar $progress -PromptForStyle $true)
+        $skipPicker = Get-StylePickerSkipPreference
+        [void](Invoke-PngToDdsForFolder -Folder $TargetFolder -LogFn $logFn -ProgressBar $progress `
+            -PromptForStyle (-not $skipPicker) -EntireTree $skipPicker)
     } else {
         Write-Log 'No tex*.png in destination — skipping PNG conversion.' $ColorFgDim
     }
@@ -4580,13 +5158,29 @@ function Invoke-FullMergePipeline {
         Write-Log '=== Step 4/4: GameBanana mods (download, unzip, merge into pack) ===' $ColorAccent
         Set-Status 'Downloading GameBanana mods...' $ColorAccent2
         if ($DryRun) {
-            $n = @(Get-GameBananaLinksFromFile -Path $linksPath).Count
-            Write-Log ("Dry run: would download $n mod(s), unzip, and append.") $ColorWarn
+            $n = @(Get-GameBananaLinksFromFile -Path $linksPath -LogFn $logFn).Count
+            $gbLayout = Resolve-GameBananaMergeTarget -TargetFolder $TargetFolder
+            $layoutNote = 'one named folder per mod under GZ2 (e.g. Magic Boomerang 86)'
+            Write-Log ("Dry run: would download $n mod(s), unzip, convert, and merge ($layoutNote).") $ColorWarn
         } else {
             $gbDownloads = @(Invoke-GameBananaDownloadToCache -LinksFile $linksPath -DownloadFolder (Get-GameBananaDownloadFolder) -LogFn $logFn -ProgressBar $progress)
-            Write-Log 'Unzipping GameBanana mods -> PNG to DDS -> append...' $ColorAccent
-            Set-Status 'Extracting and merging GameBanana mods...' $ColorFg
-            Invoke-GameBananaExtractAndMerge -TargetFolder $TargetFolder -DownloadFolder (Get-GameBananaDownloadFolder) -LogFn $logFn -ProgressBar $progress -DownloadedFiles $gbDownloads
+            if ($gbDownloads.Count -eq 0) {
+                Write-Log 'GameBanana: no zips downloaded — check gamebanana-mods.txt URLs.' $ColorWarn
+            } else {
+                $gbLayout = Resolve-GameBananaMergeTarget -TargetFolder $TargetFolder
+                Write-Log ("GameBanana target: $($gbLayout.Folder) (each mod = own folder under GZ2, no _extract)") $ColorFgDim
+                Write-Log 'Unzipping GameBanana mods -> shield picker -> PNG to DDS -> merge...' $ColorAccent
+                Set-Status 'Extracting and merging GameBanana mods...' $ColorFg
+                try {
+                    Invoke-GameBananaExtractAndMerge -TargetFolder $gbLayout.Folder -DownloadFolder (Get-GameBananaDownloadFolder) `
+                        -LogFn $logFn -ProgressBar $progress -DownloadedFiles $gbDownloads -PerModSubfolder:($gbLayout.PerModSubfolder)
+                    Write-Log 'GameBanana step finished.' $ColorOk
+                } catch {
+                    Write-Log ("GameBanana step error: $($_.Exception.Message)") $ColorErr
+                    if ($_.ScriptStackTrace) { Write-Log $_.ScriptStackTrace $ColorFgDim }
+                    throw
+                }
+            }
         }
     } else {
         Write-Log 'GameBanana: skipped (turn on checkbox above or add URLs to gamebanana-mods.txt).' $ColorFgDim
@@ -4685,7 +5279,7 @@ $runBtn.Add_Click({
         if ($dryRunBox.Checked) {
             Write-Log 'WARNING: Dry run is ON — no files will change on disk!' $ColorWarn
         }
-        Write-Log 'Order: merge folders first, then optional GameBanana.' $ColorFgDim
+        Write-Log 'Order: merge Add from -> convert dest PNG -> GameBanana (if checkbox on).' $ColorFgDim
 
         $src = Resolve-UserPackFolder -Path $srcBox.Text
         $base = Resolve-UserPackFolder -Path $dstBox.Text
@@ -4751,12 +5345,13 @@ $runBtn.Add_Click({
 
 Write-Log 'Twilight Texture Pack Merger ready.' $ColorAccent
 Write-Log ("App folder (links .txt + mod downloads): $(Get-ModMergerAppFolder)") $ColorFgDim
-Write-Log 'Append mode: "Add from" supplies missing files. Set "Output folder" to save the merged pack separately, or leave it empty to merge in place into the base pack.' $ColorFg
-Write-Log 'Run Full Merge: GameBanana download -> PNG to DDS -> merge folders -> unzip mods -> append to finished mod.' $ColorFg
+Write-Log 'GZ2 layout: .dds files go into CREATURE, MENU, MAP, etc. (same paths as source). Append = only missing paths.' $ColorFg
+Write-Log 'Download & merge: output\GZ2\<mod name>\ per mod. Run Full Merge: merge packs + optional GameBanana (same shield picker, 6 links, no _extract).' $ColorFgDim
+Write-Log 'Run Full Merge: enable "Include GameBanana mods" for step 4 — download, style picker, PNG->DDS, merge.' $ColorFg
 Write-Log 'Scan/Preview: plan only. PNG to DDS row: convert any folder manually with texconv.' $ColorFg
 Write-Log 'GameBanana button: download+merge mods alone (no folder merge).' $ColorFg
 Write-Log 'Drag the title strip to move. Dry run OFF = real merge. GameBanana is optional (checkbox in Step 3).' $ColorFg
-Write-Log 'Log panel: Merge logs / Reload all — reads _err.txt, merge-run.log, mod-merger.log (errors in red).' $ColorFgDim
+Write-Log 'Start app with launcher.bat (runs as Administrator). Log: Merge logs / Reload all (errors in red).' $ColorFgDim
 
 try {
     [Console]::TreatControlCAsInput = $false
